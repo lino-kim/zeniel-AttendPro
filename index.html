@@ -7,6 +7,71 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<!-- =====================================================================
+     FIREBASE (선택사항) — Claude.ai 밖(GitHub Pages 등)에서 "관리자 업로드 →
+     공유 저장 → 담당자 조회" 기능을 무료로 쓰기 위한 설정입니다.
+     1) https://console.firebase.google.com 에서 무료 프로젝트 생성
+     2) Build → Realtime Database → 데이터베이스 만들기
+     3) 규칙(Rules)을 아래처럼 설정 (내부용 도구이므로 인증 없이 열어둠 —
+        진짜 민감한 데이터라면 Firebase Authentication을 추가로 붙여야 합니다):
+          { "rules": { ".read": true, ".write": true } }
+     4) 프로젝트 설정 → 일반 → "내 앱" → 웹 앱 추가 → 아래 FIREBASE_CONFIG에
+        나온 값 그대로 붙여넣기
+     Claude.ai 아티팩트에서 열 때는 이 설정이 없어도 자체 저장 기능이 그대로
+     동작하니, GitHub Pages 등 외부 호스팅에서 쓸 때만 채워 넣으면 됩니다.
+     ===================================================================== -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+  // 여기에 본인 Firebase 프로젝트 설정값을 채워 넣으세요 (apiKey가 비어있으면
+  // Firebase 없이 기존 방식대로 동작합니다).
+  const FIREBASE_CONFIG = {
+    apiKey: "",
+    authDomain: "",
+    databaseURL: "",
+    projectId: "",
+    storageBucket: "",
+    messagingSenderId: "",
+    appId: "",
+  };
+
+  (function setupFirebaseStorageShim(){
+    // Claude.ai 아티팩트에서는 window.storage가 이미 내장되어 있으므로 건드리지
+    // 않는다. 여기서는 그게 없을 때(= 독립 호스팅)만, 위 설정이 채워져 있으면
+    // Firebase Realtime Database로 동일한 인터페이스를 대신 구현해준다.
+    if (window.storage || !FIREBASE_CONFIG.apiKey) return;
+    try {
+      firebase.initializeApp(FIREBASE_CONFIG);
+      const db = firebase.database();
+      const pathFor = (key, shared) => (shared ? 'shared/' : 'private/') + encodeURIComponent(key);
+      window.storage = {
+        async get(key, shared){
+          const snap = await db.ref(pathFor(key, shared)).once('value');
+          if (!snap.exists()) throw new Error('not found');
+          return { key, value: snap.val(), shared };
+        },
+        async set(key, value, shared){
+          await db.ref(pathFor(key, shared)).set(value);
+          return { key, value, shared };
+        },
+        async delete(key, shared){
+          await db.ref(pathFor(key, shared)).remove();
+          return { key, deleted: true, shared };
+        },
+        async list(prefix, shared){
+          const snap = await db.ref(shared ? 'shared' : 'private').once('value');
+          if (!snap.exists()) return { keys: [] };
+          const all = Object.keys(snap.val()).map(decodeURIComponent);
+          return { keys: prefix ? all.filter(k => k.startsWith(prefix)) : all };
+        },
+      };
+    } catch (err) {
+      console.error('Firebase storage shim init failed:', err);
+    }
+  })();
+</script>
+
 <style>
 :root{
   --ink:#10192B;
@@ -93,6 +158,7 @@ a, .tab-btn, .btn, .quota-input, input, select{-webkit-tap-highlight-color:trans
 .btn{
   border:none; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:600;
   display:inline-flex; align-items:center; gap:7px; transition:transform .12s ease, opacity .12s ease, background .15s ease;
+  min-height:38px;
 }
 .btn:active{transform:scale(0.97);}
 .btn:disabled{opacity:0.4; cursor:not-allowed;}
@@ -161,7 +227,7 @@ main{max-width:1360px; margin:0 auto; padding:26px 28px 80px;}
 .kpi-grid{display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:22px;}
 @media (max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr);}}
 
-.two-col-row{display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;}
+.two-col-row{display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:stretch;}
 @media (max-width:900px){.two-col-row{grid-template-columns:1fr;}}
 
 /* weekly schedule table */
@@ -363,19 +429,22 @@ footer.app-footer{text-align:center; padding:30px 20px 50px; color:var(--muted);
 }
 .vbar-label{margin-top:8px; font-size:11px; color:var(--muted); font-weight:600; text-align:center; max-width:62px; overflow:hidden; text-overflow:ellipsis;}
 
-/* manager number-summary grid */
-.mgr-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; max-height:300px; overflow-y:auto; padding-right:4px;}
+/* manager summary — single clean horizontal strip */
 .chart-scroll{max-height:300px; overflow-y:auto; padding-right:4px;}
-.mgr-card{
-  border:1px solid var(--line); border-radius:9px; padding:12px 13px; background:#fbfcfb;
+.dist-grid-scroll{max-height:300px; overflow-y:auto; padding-right:4px;}
+.mgr-strip{display:flex; flex-wrap:wrap; gap:9px;}
+.mgr-chip{
+  flex:0 0 auto; display:flex; align-items:center; gap:8px;
+  border:1px solid var(--line); border-radius:99px; padding:7px 14px 7px 13px; background:#fbfcfb;
+  white-space:nowrap; transition:box-shadow .15s ease, border-color .15s ease;
 }
-.mgr-card .name{font-weight:700; font-size:12.8px; margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.mgr-card .nums{display:flex; align-items:baseline; gap:8px;}
-.mgr-card .nums .n{font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:20px; color:var(--ink);}
-.mgr-card .nums .n-label{font-size:10.5px; color:var(--muted);}
-.mgr-card .anom{margin-top:6px; font-size:11px; font-weight:700;}
-.mgr-card .anom.zero{color:var(--muted); font-weight:500;}
-.mgr-card .anom.some{color:var(--danger);}
+.mgr-chip:hover{border-color:var(--brand-green); box-shadow:0 2px 8px -3px rgba(16,25,43,0.15);}
+.mgr-chip-name{font-weight:700; font-size:12.8px; color:var(--ink);}
+.mgr-chip-count{font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px; color:var(--ink); padding-left:2px;}
+.mgr-chip-count .unit{font-family:'IBM Plex Sans KR',sans-serif; font-weight:500; font-size:10.5px; color:var(--muted); margin-left:2px;}
+.mgr-chip-anom{font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:99px;}
+.mgr-chip-anom.zero{color:var(--muted); background:#EEF0EC; font-weight:600;}
+.mgr-chip-anom.some{color:var(--danger); background:var(--danger-soft);}
 
 /* icon-based distribution cards */
 .dist-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(128px,1fr)); gap:10px;}
@@ -409,25 +478,31 @@ footer.app-footer{text-align:center; padding:30px 20px 50px; color:var(--muted);
   .kpi-grid{ grid-template-columns:repeat(2,1fr); gap:8px; }
   .kpi{ padding:12px 12px 10px; }
   .kpi .kpi-value{ font-size:21px; }
-  .mgr-grid{ grid-template-columns:repeat(2,1fr); }
+  .mgr-chip{ padding:8px 12px; gap:7px; }
+  .mgr-chip-name{ font-size:11.5px; }
+  .mgr-chip-count{ font-size:13px; }
   .dist-grid{ grid-template-columns:repeat(3,1fr); gap:8px; }
   .dist-card{ padding:10px 6px 9px; }
   .dist-card .n{ font-size:16px; }
   .tabbar{ gap:0; }
   .tab-btn{ padding:9px 11px; font-size:12px; }
   .employee-picker, .filter-row{ flex-direction:column; align-items:stretch; gap:8px; }
-  .employee-picker select, .employee-picker input, .filter-row select, .filter-row input[type="text"]{ width:100%; min-width:0; }
+  .employee-picker select, .employee-picker input, .filter-row select, .filter-row input[type="text"]{ width:100%; min-width:0; padding:10px 12px; }
   .filter-row .count-pill{ align-self:flex-start; }
   table{ font-size:11px; }
   thead th, tbody td{ padding:7px 8px; }
   .cal-grid{ gap:4px; }
   .cal-cell{ min-height:52px; padding:6px 6px 4px; font-size:9.5px; border-radius:6px; }
   .cal-cell .d{ font-size:11px; }
+  .cal-cell .t{ display:none; } /* 계획/출근시간 상세 줄은 좁은 화면에서 숨기고 상태만 보여줌 */
+  .cal-cell .t-pending{ display:block; font-size:8px; } /* 데이터 대기중 경고는 계속 보여줌 */
   .emp-summary-card .row{ gap:14px; }
   .quota-grid{ grid-template-columns:1fr; }
-  .org-manager-row{ flex-wrap:wrap; gap:6px 12px; }
+  .quota-input{ min-height:34px; width:56px; }
+  .org-manager-row{ flex-wrap:wrap; gap:6px 12px; min-height:44px; }
   .modal-card{ width:88vw; }
   .wk-pill{ font-size:10px; padding:4px 7px; }
+  .btn{ min-height:40px; }
 }
 </style>
 </head>
@@ -551,6 +626,8 @@ const STATUS_META = {
   off_but_worked:    {label:'휴무일 출근',                cls:'tag-purple',  color:'#6B5FD6', severity:1, icon:'↻'},
   no_schedule:       {label:'스케줄 미입력',              cls:'tag-danger',  color:'#C13F34', severity:2, icon:'?'},
   leave_not_reflected:{label:'연차사용(스케줄 미반영)',    cls:'tag-orange',  color:'#B96A28', severity:1, icon:'↻'},
+  quota_off_exceeded: {label:'휴무 한도 초과',            cls:'tag-danger',  color:'#C13F34', severity:2, icon:'!'},
+  quota_sub_exceeded: {label:'대체휴무 한도 초과',        cls:'tag-danger',  color:'#C13F34', severity:2, icon:'!'},
 };
 
 const WEEKDAYS_KR = ['일','월','화','수','목','금','토'];
@@ -958,24 +1035,33 @@ function renderSummary(){
   const mgrGridHtml = Array.from(byMgr.entries())
     .sort((x,y)=>y[1].count-x[1].count)
     .map(([mgr,v]) => `
-      <div class="mgr-card">
-        <div class="name">${escapeHtml(mgr)}</div>
-        <div class="nums"><span class="n">${v.count}</span><span class="n-label">명</span></div>
-        <div class="anom ${v.anomalies?'some':'zero'}">${v.anomalies ? `이상 ${v.anomalies}건` : '이상 없음'}</div>
+      <div class="mgr-chip">
+        <span class="mgr-chip-name">${escapeHtml(mgr)}</span>
+        <span class="mgr-chip-count">${v.count}<span class="unit">명</span></span>
+        <span class="mgr-chip-anom ${v.anomalies?'some':'zero'}">${v.anomalies ? `이상 ${v.anomalies}` : '이상 없음'}</span>
       </div>`).join('');
 
   // judgement distribution — icon + number cards
   const dist = {};
   a.dayMatrix.forEach(d => { dist[d.judgement] = (dist[d.judgement]||0)+1; });
   const distTotal = Math.max(1, totalCells); // exclude 'future' from the % base
-  const distHtml = Object.entries(dist).sort((x,y)=>y[1]-x[1]).map(([k,v]) => {
+  // 휴무/대체휴무 한도 초과는 일자 단위가 아니라 상담사 단위 집계이므로, 전체 상담사
+  // 수를 기준으로 별도 비율을 계산해 같은 카드 그리드에 함께 보여준다.
+  const quotaExceedList = getQuotaExceedAnomalies();
+  const quotaExceedCounts = { quota_off_exceeded: 0, quota_sub_exceeded: 0 };
+  quotaExceedList.forEach(x => { quotaExceedCounts[x.judgement] = (quotaExceedCounts[x.judgement]||0) + 1; });
+  const empTotal = Math.max(1, a.employees.length);
+  const distEntries = Object.entries(dist).filter(([k]) => k !== 'future');
+  Object.entries(quotaExceedCounts).forEach(([k,v]) => { if (v>0) distEntries.push([k,v]); });
+  const distHtml = distEntries.sort((x,y)=>y[1]-x[1]).map(([k,v]) => {
     const meta = STATUS_META[k];
-    const pct = k === 'future' ? null : (v/distTotal*100);
+    const isQuotaCard = k==='quota_off_exceeded' || k==='quota_sub_exceeded';
+    const pct = isQuotaCard ? (v/empTotal*100) : (v/distTotal*100);
     return `
     <div class="dist-card" style="background:${meta.color}14; border-color:${meta.color}33;">
       <div class="ic" style="background:${meta.color}">${meta.icon}</div>
       <div class="n" style="color:${meta.color}">${fmtNum(v)}</div>
-      ${pct!=null ? `<div class="pct" style="color:${meta.color}">${fmtPct(pct)}</div>` : ''}
+      ${pct!=null ? `<div class="pct" style="color:${meta.color}">${fmtPct(pct)}${isQuotaCard?' (상담사 기준)':''}</div>` : ''}
       <div class="lbl">${escapeHtml(meta.label)}</div>
     </div>`;
   }).join('');
@@ -1000,15 +1086,15 @@ function renderSummary(){
       </div>
 
       <div class="panel-card">
-        <h3>매니저별 요약</h3>
-        <div class="mgr-grid">${mgrGridHtml || '<p class="section-sub">데이터 없음</p>'}</div>
+        <h3>근태 판정 분포 &amp; 준수율</h3>
+        <p class="section-sub" style="margin:-6px 0 12px;">전체 상담사 × 일자, 기준일(${a.cutoffIso})까지</p>
+        <div class="dist-grid dist-grid-scroll">${distHtml}</div>
       </div>
     </div>
 
     <div class="panel-card">
-      <h3>근태 판정 분포 &amp; 준수율</h3>
-      <p class="section-sub" style="margin:-6px 0 12px;">전체 상담사 × 일자, 기준일(${a.cutoffIso})까지</p>
-      <div class="dist-grid">${distHtml}</div>
+      <h3>매니저별 요약</h3>
+      <div class="mgr-strip">${mgrGridHtml || '<p class="section-sub">데이터 없음</p>'}</div>
     </div>
 
     ${renderWeeklyScheduleHtml()}
@@ -1027,10 +1113,27 @@ function mondayOf(dateObj){
   return d;
 }
 
+function getRealTodayIso(){
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+}
+
+// "오늘"은 근태 데이터가 마지막으로 들어온 기준일(cutoffIso)이 아니라, 보고 있는
+// 바로 그 날짜여야 한다 — 스케줄표 자체는 이번 달 전체가 이미 입력되어 있으므로,
+// 실제 오늘이 분석 대상 월 안에 있으면 그 날짜를 그대로 쓴다. 다른 달(과거) 보고서를
+// 보는 중이라 실제 오늘이 그 달을 벗어나면, 그때만 데이터 기준일로 대체한다.
+function getWeekAnchorIso(){
+  const a = ANALYSIS;
+  const todayIso = getRealTodayIso();
+  const [ty, tm] = todayIso.split('-').map(Number);
+  if (ty === a.year && tm === a.month) return todayIso;
+  return a.cutoffIso;
+}
+
 function getWeekDates(){
   const a = ANALYSIS;
-  const cutoff = isoToDateObj(a.cutoffIso);
-  const weekStart = mondayOf(cutoff);
+  const anchorIso = getWeekAnchorIso();
+  const weekStart = mondayOf(isoToDateObj(anchorIso));
   weekStart.setDate(weekStart.getDate() + WEEK_OFFSET*7);
   const dates = [];
   for (let i=0; i<7; i++){
@@ -1038,7 +1141,7 @@ function getWeekDates(){
     d.setDate(d.getDate()+i);
     const iso = `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
     const inMonth = d.getFullYear()===a.year && (d.getMonth()+1)===a.month;
-    dates.push({ date:d, iso, day:d.getDate(), weekday:WEEKDAYS_KR[d.getDay()], inMonth, isToday: iso===a.cutoffIso });
+    dates.push({ date:d, iso, day:d.getDate(), weekday:WEEKDAYS_KR[d.getDay()], inMonth, isToday: iso===anchorIso });
   }
   return dates;
 }
@@ -1101,10 +1204,13 @@ function renderWeeklyScheduleHtml(){
   const weekDates = getWeekDates();
   const emps = getWeekFilteredEmployees();
 
-  // "오늘"(기준일) 스냅샷 KPI — 필터와 무관하게 전체 기준
+  // "오늘" 스냅샷 KPI — 필터와 무관하게 전체 기준. 하이라이트된 열(오늘 컬럼)과
+  // 반드시 같은 날짜를 기준으로 집계한다.
+  const anchorIso = getWeekAnchorIso();
+  const anchorDay = Number(anchorIso.slice(8,10));
   let workCnt=0, offCnt=0, eduCnt=0;
   a.employees.forEach(e => {
-    const dayRec = e.days.find(d => d.day === a.cutoffDay);
+    const dayRec = e.days.find(d => d.day === anchorDay);
     const cat = scheduleCategory(dayRec ? dayRec.planCode : '');
     if (cat==='work') workCnt++; else if (cat==='off') offCnt++; else eduCnt++;
   });
@@ -1117,7 +1223,7 @@ function renderWeeklyScheduleHtml(){
     <div class="panel-card" id="weekSection">
       <h3>주차별 상담사 주간근무계획표</h3>
       <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr); margin-bottom:16px;">
-        <div class="kpi good"><div class="kpi-label">오늘(${a.cutoffIso}) 근무</div><div class="kpi-value">${workCnt}명</div></div>
+        <div class="kpi good"><div class="kpi-label">오늘(${anchorIso}) 근무</div><div class="kpi-value">${workCnt}명</div></div>
         <div class="kpi"><div class="kpi-label">오늘 휴무/연차</div><div class="kpi-value">${offCnt}명</div></div>
         <div class="kpi"><div class="kpi-label">오늘 교육/기타</div><div class="kpi-value">${eduCnt}명</div></div>
       </div>
@@ -1140,7 +1246,7 @@ function renderWeeklyScheduleHtml(){
         <span class="count-pill" id="weekCountPill">${emps.length}명</span>
       </div>
 
-      <div class="table-wrap" style="height:520px; overflow:auto;">
+      <div class="table-wrap" id="weekTableWrap" style="height:300px; overflow:auto;">
         <table>
           <thead><tr>
             <th>상담사</th>
@@ -1163,6 +1269,22 @@ function bindWeeklyScheduleEvents(){
   document.getElementById('weekMgrFilter').addEventListener('change', e => { WEEK_MANAGER_FILTER = e.target.value; updateWeekBody(); });
   const searchEl = document.getElementById('weekSearch');
   bindSearchInput(searchEl, val => { WEEK_SEARCH = val; updateWeekBody(); });
+  fitWeekTableToRows(5);
+}
+
+// sizes the scroll box to show exactly N counselor rows (plus header), so the box
+// height stays consistent regardless of font size/zoom — the rest scrolls.
+function fitWeekTableToRows(n){
+  const wrap = document.getElementById('weekTableWrap');
+  if (!wrap) return;
+  const thead = wrap.querySelector('thead');
+  const firstRow = wrap.querySelector('tbody tr');
+  if (!thead || !firstRow) return;
+  const headH = thead.getBoundingClientRect().height;
+  const rowH = firstRow.getBoundingClientRect().height;
+  if (headH > 0 && rowH > 0){
+    wrap.style.height = Math.round(headH + rowH * n) + 'px';
+  }
 }
 
 // week navigation changes the header (date range label + "오늘" highlighted column)
@@ -1190,6 +1312,38 @@ function computeQuotaStatus(sabun, usage){
     offRemaining: offQuota==null ? null : Math.round((offQuota - offUsed)*10)/10,
     subRemaining: subQuota==null ? null : Math.round((subQuota - subUsed)*10)/10,
   };
+}
+
+// 휴무/대체휴무 한도 초과는 관리자가 "휴무 한도 설정"에서 QUOTAS를 바꿀 때마다 즉시
+// 달라져야 하므로, 분석 시점에 고정하지 않고 매번 현재 QUOTAS 기준으로 다시 계산한다.
+function getQuotaExceedAnomalies(){
+  const a = ANALYSIS;
+  if (!a) return [];
+  const out = [];
+  a.employees.forEach(e => {
+    const qs = computeQuotaStatus(e.sabun, e.usage);
+    if (qs.offQuota != null && qs.offRemaining < 0){
+      out.push({
+        date: a.cutoffIso, weekday: '', name: e.name, sabun: e.sabun, store: e.store,
+        route: e.route, regionHead: e.regionHead, manager: e.manager,
+        planCode: `휴무 ${qs.offUsed}일 / 한도 ${qs.offQuota}일`,
+        actualIn: '', leaveStatus: '',
+        judgement: 'quota_off_exceeded',
+        judgementLabel: `${STATUS_META.quota_off_exceeded.label} (${Math.abs(qs.offRemaining)}일)`,
+      });
+    }
+    if (qs.subQuota != null && qs.subRemaining < 0){
+      out.push({
+        date: a.cutoffIso, weekday: '', name: e.name, sabun: e.sabun, store: e.store,
+        route: e.route, regionHead: e.regionHead, manager: e.manager,
+        planCode: `대체휴무 ${qs.subUsed}일 / 한도 ${qs.subQuota}일`,
+        actualIn: '', leaveStatus: '',
+        judgement: 'quota_sub_exceeded',
+        judgementLabel: `${STATUS_META.quota_sub_exceeded.label} (${Math.abs(qs.subRemaining)}일)`,
+      });
+    }
+  });
+  return out;
 }
 
 function buildQuotaRowsHtml(emps){
@@ -1669,7 +1823,7 @@ function exportExcel(){
    ========================================================================= */
 function getFilteredAnomalies(){
   const a = ANALYSIS;
-  let filtered = a.anomalies.slice();
+  let filtered = a.anomalies.concat(getQuotaExceedAnomalies());
   if (ANOMALY_FILTERS.date!=='전체') filtered = filtered.filter(x=>x.date===ANOMALY_FILTERS.date);
   if (ANOMALY_FILTERS.type!=='전체') filtered = filtered.filter(x=>x.judgement===ANOMALY_FILTERS.type);
   if (ANOMALY_FILTERS.region!=='전체') filtered = filtered.filter(x=>x.regionHead===ANOMALY_FILTERS.region);
@@ -1685,7 +1839,7 @@ function getFilteredAnomalies(){
 function buildAnomalyRowsHtml(filtered){
   return filtered.slice(0,800).map(x => `
     <tr>
-      <td class="mono">${escapeHtml(x.date)} (${escapeHtml(x.weekday)})</td>
+      <td class="mono">${escapeHtml(x.date)}${x.weekday ? ` (${escapeHtml(x.weekday)})` : ' (월간)'}</td>
       <td>${escapeHtml(x.name)}</td>
       <td class="mono">${escapeHtml(x.sabun)}</td>
       <td>${escapeHtml(x.store)}</td>
@@ -1712,10 +1866,11 @@ function updateAnomalyBody(){
 
 function renderAnomaly(){
   const a = ANALYSIS;
-  const dates = Array.from(new Set(a.anomalies.map(x=>x.date))).sort();
-  const types = Array.from(new Set(a.anomalies.map(x=>x.judgement)));
-  const heads = Array.from(new Set(a.anomalies.map(x=>x.regionHead))).sort((x,y)=>x.localeCompare(y,'ko'));
-  const mgrs = Array.from(new Set(a.anomalies.map(x=>x.manager))).sort((x,y)=>x.localeCompare(y,'ko'));
+  const allAnomalies = a.anomalies.concat(getQuotaExceedAnomalies());
+  const dates = Array.from(new Set(allAnomalies.map(x=>x.date))).sort();
+  const types = Array.from(new Set(allAnomalies.map(x=>x.judgement)));
+  const heads = Array.from(new Set(allAnomalies.map(x=>x.regionHead))).sort((x,y)=>x.localeCompare(y,'ko'));
+  const mgrs = Array.from(new Set(allAnomalies.map(x=>x.manager))).sort((x,y)=>x.localeCompare(y,'ko'));
 
   const filterHtml = `
     <div class="filter-row">
@@ -1812,22 +1967,30 @@ function renderEmployeeTab(){
   const legendItems = Object.entries(STATUS_META).map(([k,m]) =>
     `<div class="item"><span class="sw" style="background:${m.color}"></span>${escapeHtml(m.label)}</div>`).join('')
     + `<div class="item"><span class="sw" style="background:#1D7A9C"></span>대체휴일(1일/0.5일)</div>`
-    + `<div class="item"><span class="sw" style="background:#6B4FC7"></span>보상휴가(1일/0.5일)</div>`;
+    + `<div class="item"><span class="sw" style="background:#6B4FC7"></span>보상휴가(1일/0.5일)</div>`
+    + `<div class="item"><span class="sw" style="background:#fff; box-shadow:inset 0 0 0 2px #1E66F5;"></span>오늘 / 근태 데이터 대기중</div>`;
 
   // leading blank cells for first day-of-week alignment
   const firstDow = isoToDateObj(isoFromParts(a.year, a.month, 1)).getDay();
   let cells = '';
   for (let i=0;i<firstDow;i++) cells += `<div></div>`;
+  const realTodayIso = getRealTodayIso();
   emp.days.forEach(d => {
     const meta = dayDisplayMeta(d.judgement, d.planCode);
     const bg = meta.color + '22';
     const timeStr = d.actual ? (d.actual.inTime||d.actual.inTimeChg||'') : '';
     const showPlanLine = d.planCode && d.planCode !== meta.label;
-    cells += `<div class="cal-cell" style="background:${bg}; border-color:${meta.color}44;">
+    // 실제 접속(오늘) 날짜와, 이미 지났는데 근태 데이터가 아직 안 들어와 "예정"으로
+    // 표시된 날짜를 파란 테두리로 구분해준다 (기준일이 실제 오늘보다 늦어질 수 있음).
+    const isToday = d.iso === realTodayIso;
+    const isPastPendingData = d.iso < realTodayIso && d.judgement === 'future';
+    const blueRing = isToday ? 'box-shadow:inset 0 0 0 3px #1E66F5;' : (isPastPendingData ? 'box-shadow:inset 0 0 0 2px #1E66F5;' : '');
+    cells += `<div class="cal-cell" style="background:${bg}; border-color:${meta.color}44; ${blueRing}">
       <div class="d">${d.day}<span style="font-weight:400;color:var(--muted);font-size:10px;"> (${d.weekday})</span></div>
       <div class="s" style="color:${meta.color}">${escapeHtml(meta.label)}</div>
       ${showPlanLine ? `<div class="t">계획: ${escapeHtml(d.planCode)}</div>` : ''}
       ${timeStr ? `<div class="t">출근 ${escapeHtml(timeStr)}</div>` : ''}
+      ${isPastPendingData ? `<div class="t t-pending" style="color:#1E66F5;font-weight:700;">⏳ 데이터 대기중</div>` : ''}
     </div>`;
   });
 
