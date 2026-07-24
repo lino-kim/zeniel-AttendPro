@@ -70,6 +70,48 @@
       console.error('Firebase storage shim init failed:', err);
     }
   })();
+
+  // 마지막 안전망: Claude.ai 내장 저장소도, Firebase 설정도 없는 경우(=순수 로컬
+  // 파일로 열었거나 Firebase를 아직 설정하지 않은 경우) 최소한 "이 브라우저에서
+  // 재접속해도 방금 올린 파일이 사라지지 않도록" localStorage로 저장해준다.
+  // 주의: 이건 이 브라우저에만 저장되는 것이라 다른 사람과 공유되지는 않는다 —
+  // 여러 사람과 공유하려면 위 Firebase 설정을 채우는 것을 권장한다.
+  (function setupLocalStorageShim(){
+    if (window.storage) return;
+    try {
+      const PREFIX = 'zeniel_attendpro__';
+      const pathFor = (key, shared) => PREFIX + (shared ? 'shared__' : 'private__') + key;
+      window.storage = {
+        async get(key, shared){
+          const v = localStorage.getItem(pathFor(key, shared));
+          if (v === null) throw new Error('not found');
+          return { key, value: v, shared };
+        },
+        async set(key, value, shared){
+          localStorage.setItem(pathFor(key, shared), value);
+          return { key, value, shared };
+        },
+        async delete(key, shared){
+          localStorage.removeItem(pathFor(key, shared));
+          return { key, deleted: true, shared };
+        },
+        async list(prefix, shared){
+          const base = PREFIX + (shared ? 'shared__' : 'private__');
+          const keys = [];
+          for (let i=0; i<localStorage.length; i++){
+            const k = localStorage.key(i);
+            if (k && k.startsWith(base)){
+              const orig = k.slice(base.length);
+              if (!prefix || orig.startsWith(prefix)) keys.push(orig);
+            }
+          }
+          return { keys };
+        },
+      };
+    } catch (err) {
+      console.error('localStorage storage shim init failed:', err);
+    }
+  })();
 </script>
 
 <style>
@@ -617,6 +659,8 @@ const LEAVE_STATUS_KEEP = ['대기','승인']; // per spec: only these are refle
 const STATUS_META = {
   work_ok:          {label:'정상출근',                 cls:'tag-ok',      color:'#0A8C7F', severity:0, icon:'✓'},
   work_ok_edu:       {label:'정상출근(교육)',            cls:'tag-edu',     color:'#0B67A8', severity:0, icon:'✓'},
+  half_day_ok:       {label:'정상출근(반차)',            cls:'tag-ok',      color:'#0A8C7F', severity:0, icon:'✓'},
+  half_day_absent:   {label:'결근(반차·미출근)',          cls:'tag-danger',  color:'#C13F34', severity:3, icon:'✕'},
   off_ok:            {label:'정상(휴무)',                cls:'tag-off',     color:'#8A9188', severity:0, icon:'–'},
   leave_ok:          {label:'정상(휴무)',            cls:'tag-leave',   color:'#0B3B8C', severity:0, icon:'✓'},
   leave_pending:     {label:'연차 신청(대기중)',          cls:'tag-pending', color:'#8A6415', severity:1, icon:'◐'},
@@ -695,6 +739,18 @@ function escapeHtml(s){
   }[c]));
 }
 function normName(s){ return String(s||'').replace(/\s+/g,'').trim(); }
+
+// 휴가구분 표시용 — 원본 파일엔 "반차"라는 구분값이 따로 없어서(연차/대체휴무 둘뿐),
+// 오전반차·오후반차는 물론 "연차"인데 사용갯수가 0.5인 경우까지 전부 "반차"로 통일해
+// 보여준다. 캐시된(예전에 저장된) 분석 결과에도 항상 적용되도록 매번 원본 kind/amount
+// 값에서 다시 계산한다 (저장 시점에 미리 계산해 박아두지 않음).
+function leaveKindDisplay(kind, amount){
+  const k = (kind||'').trim();
+  if (k === '오전반차' || k === '오후반차') return '반차';
+  const amt = parseFloat(amount);
+  if (!isNaN(amt) && Math.abs(amt - 0.5) < 1e-9) return '반차';
+  return k || '-';
+}
 
 // Korean (and other IME) input composes multiple keystrokes into one character.
 // Re-rendering the DOM on every 'input' event destroys the input mid-composition
@@ -1588,7 +1644,7 @@ function buildLeaveRowsHtml(filtered){
       <td>${escapeHtml(x.store)}</td>
       <td>${escapeHtml(x.regionHead)}</td>
       <td>${escapeHtml(x.manager)}</td>
-      <td>${escapeHtml(x.kind)}</td>
+      <td>${escapeHtml(leaveKindDisplay(x.kind, x.perDayAmount))}</td>
       <td>${escapeHtml(String(x.perDayAmount))}${x.start!==x.end?` <span style="color:var(--muted)">(총 ${escapeHtml(x.amount)}, ${escapeHtml(x.start)}~${escapeHtml(x.end)})</span>`:''}</td>
       <td><span class="tag tag-status-${escapeHtml(x.status)}">${escapeHtml(x.status)}</span></td>
       <td>${x.reflected==='반영됨'?`<span class="tag tag-ok">반영됨</span>`: x.reflected==='미반영'?`<span class="tag tag-orange">미반영</span>`:`<span class="tag tag-off">${escapeHtml(x.reflected)}</span>`}</td>
@@ -1725,96 +1781,39 @@ function exportExcel(){
   const a = ANALYSIS;
   const wb = XLSX.utils.book_new();
 
-  // 1. 요약
-  const summaryRows = [
-    {항목:'분석월', 값:`${a.year}년 ${a.month}월`},
-    {항목:'판정 기준일', 값:a.cutoffIso},
-    {항목:'담당 상담사 수', 값:a.employees.length},
-    {항목:'이상 확인 필요 건수', 값:a.anomalies.length},
-    {항목:'연차 신청 전체(원본)', 값:a.totalLeaveAll},
-    {항목:'연차 신청 반영(대기+승인)', 값:a.totalLeaveKept},
-    {항목:'매장 매칭 실패 수', 값:a.unmatchedStores.length},
-    {항목:'', 값:''},
-    {항목:'"휴무 초과 확인" 시트 기준', 값:'주(월~일) 합계 3일 초과 시 "3일 초과"로 표시'},
-    {항목:'', 값:''},
-    {항목:'판정 유형별 건수', 값:''},
-  ];
-  const dist = {};
-  a.dayMatrix.forEach(d => { dist[d.judgement] = (dist[d.judgement]||0)+1; });
-  Object.entries(dist).sort((x,y)=>y[1]-x[1]).forEach(([k,v]) => summaryRows.push({항목:STATUS_META[k].label, 값:v}));
-  const wsSummary = XLSX.utils.json_to_sheet(summaryRows, {skipHeader:false});
-  XLSX.utils.book_append_sheet(wb, wsSummary, '요약');
-
-  // 2. 일자별상세
-  const detailRows = a.dayMatrix.map(x => ({
-    사번:x.sabun, 이름:x.name, 매장:x.store, 경로:x.route, 권역:x.region, 지역:x.area,
-    지역장:x.regionHead, 매니저:x.manager, 날짜:x.date, 요일:x.weekday,
-    스케줄:x.planCode, 실제출근:x.actualIn, 실제퇴근:x.actualOut, 출근지점:x.actualPlace,
-    연차상태:x.leaveStatus, 휴가구분:x.leaveKind, 판정:x.judgementLabel,
+  // 1. 근태RAW — 참조 양식과 동일한 열 순서(이름·근무일자·[빈 헤더의 고유키]·실제출근시간·
+  // 사번·실제퇴근시간·변경출근시간·변경퇴근시간·출근지점·퇴근지점·수정요청)로, 근태관리
+  // 원본 입력값을 그대로 재구성한다. 참조 파일의 C열 헤더가 비어 있어 그대로 빈 문자열로 맞춘다.
+  const rawRows = (a.attendRecordsRaw||[]).map(r => ({
+    이름: r.name, 근무일자: r.dateStr, '': `${r.name}${r.dateStr}`,
+    '(실제)출근시간': r.inTime, 사번: r.sabun, '(실제)퇴근시간': r.outTime,
+    '(변경)출근시간': r.inTimeChg, '(변경)퇴근시간': r.outTimeChg,
+    출근지점: r.inPlace, 퇴근지점: r.outPlace, 수정요청: r.editReq,
   }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailRows), '일자별상세');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows), '근태RAW');
 
-  // 3. 이상현황
-  const anomalyRows = a.anomalies.map(x => ({
-    날짜:x.date, 요일:x.weekday, 이름:x.name, 사번:x.sabun, 매장:x.store, 경로:x.route,
-    지역장:x.regionHead, 매니저:x.manager, 스케줄:x.planCode, 실제출근:x.actualIn,
-    연차상태:x.leaveStatus, 판정:x.judgementLabel,
-  }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(anomalyRows), '이상현황');
-
-  // 3-1. CE 근태 미입력 — 결근(미출근·연차미신청) 및 스케줄 미입력만 별도로 모은 시트
-  const ceMissingRows = a.anomalies
-    .filter(x => x.judgement === 'absent_unauth' || x.judgement === 'no_schedule')
-    .map(x => ({
-      구분:'CE', 이름:x.name, 사번:x.sabun, 날짜:x.date, 점포:x.store,
-      지역장:x.regionHead, 담당자:x.manager, 스케줄:x.planCode||'(미입력)', 판정:x.judgementLabel,
-    }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ceMissingRows), 'CE 근태 미입력');
-
-  // 3-2. 휴무 초과 확인 — 주차(월~일)별 휴무/대체휴일/보상휴가/연차/반차 사용 내역
-  const weeklyOffRows = buildWeeklyOffExcessRows(a);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(weeklyOffRows), '휴무 초과 확인');
-
-  // 4. 연차신청현황(대기_승인) — 휴가기간을 일자별로 나열
-  const leaveRows = a.leaveDaily.map(x => ({
-    날짜:x.date, 요일:x.weekday, 신청일:x.applyDate, 이름:x.name, 사번:x.sabun, 매장:x.store,
-    지역장:x.regionHead, 매니저:x.manager, 휴가구분:x.kind, 당일사용:x.perDayAmount,
-    전체기간:`${x.start}${x.start!==x.end?' ~ '+x.end:''}`, 전체사용갯수:x.amount,
-    상태:x.status, 스케줄반영여부:x.reflected, 행선지:x.dest, 비고:x.note,
-  }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(leaveRows), '연차신청현황(대기_승인)');
-
-  // 5. 조직현황
-  const orgRows = a.employees.map(e => ({
-    지역장:e.regionHead, 매니저:e.manager, 매장:e.store, 경로:e.route, 이름:e.name, 사번:e.sabun,
-    재직상태:e.status, 정상건수:Object.entries(e.counts).filter(([k])=>STATUS_META[k].severity===0).reduce((s,[,v])=>s+v,0),
-    이상건수:Object.entries(e.counts).filter(([k])=>STATUS_META[k].severity>=1).reduce((s,[,v])=>s+v,0),
-  }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(orgRows), '조직현황');
-
-  // 5-1. 휴무 한도 현황
-  const quotaRows = a.employees.map(e => {
-    const qs = computeQuotaStatus(e.sabun, e.usage);
-    return {
-      이름:e.name, 사번:e.sabun, 매장:e.store, 담당자:e.manager,
-      휴무사용:qs.offUsed, 휴무한도: qs.offQuota==null?'미설정':qs.offQuota,
-      휴무잔여초과: qs.offQuota==null?'':(qs.offRemaining<0?`초과 ${Math.abs(qs.offRemaining)}`:`잔여 ${qs.offRemaining}`),
-      대체휴무사용_합계:qs.subUsed, 대체휴일사용:qs.subBreakdown.sub, 보상휴가사용:qs.subBreakdown.comp,
-      대체휴무한도: qs.subQuota==null?'미설정':qs.subQuota,
-      대체휴무잔여초과: qs.subQuota==null?'':(qs.subRemaining<0?`초과 ${Math.abs(qs.subRemaining)}`:`잔여 ${qs.subRemaining}`),
-      연차사용_참고용: qs.annualUsed,
-    };
+  // 2. N월 연차사용 — 참조 양식과 동일한 구성(사번·이름·반차·연차·합계·제모스·제모스미신청)
+  // + 맨 아래 합계 행. 참조 파일과 대조해보니 이 시트는 스케줄표가 아니라 "승인된 연차신청
+  // 건" 자체를 기준으로 집계되어 있어(대기 상태는 제외), 동일하게 a.leaveDaily 중 상태가
+  // 승인인 건만, 하루치 사용량이 0.5면 반차로, 아니면 연차로 나눠 합산한다. "제모스"류 두
+  // 컬럼은 참조 파일에서도 항상 0이라 대응 원천 데이터가 없어 0으로 채운다.
+  const annualUsageMap = new Map(); // sabun -> {name, half, full}
+  a.leaveDaily.filter(x => x.status === '승인').forEach(x => {
+    if (!annualUsageMap.has(x.sabun)) annualUsageMap.set(x.sabun, {name:x.name, half:0, full:0});
+    const rec = annualUsageMap.get(x.sabun);
+    if (Math.abs(x.perDayAmount - 0.5) < 1e-9) rec.half += 0.5;
+    else rec.full += x.perDayAmount;
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(quotaRows), '휴무한도현황');
+  const annualRows = a.employees.slice().sort((x,y)=>x.name.localeCompare(y.name,'ko')).map(e => {
+    const rec = annualUsageMap.get(e.sabun) || {half:0, full:0};
+    return { 사번:e.sabun, 이름:e.name, 반차:rec.half, 연차:rec.full, 합계:Math.round((rec.half+rec.full)*10)/10, 제모스:0, 제모스미신청:0 };
+  });
+  const totalHalf = annualRows.reduce((s,r)=>s+r.반차,0);
+  const totalFull = annualRows.reduce((s,r)=>s+r.연차,0);
+  annualRows.push({ 사번:'', 이름:'', 반차:Math.round(totalHalf*10)/10, 연차:totalFull, 합계:Math.round((totalHalf+totalFull)*10)/10, 제모스:0, 제모스미신청:0 });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(annualRows), `${a.month}월 연차사용`);
 
-  // 6. 참고: 미매칭/제외
-  const noteRows = [];
-  a.unmatchedStores.forEach(s => noteRows.push({구분:'매장매칭실패', 내용:s}));
-  a.ghostSabuns.forEach(s => noteRows.push({구분:'근무계획표 미등록 인원', 내용:s.split('|')[1]+' ('+s.split('|')[0]+')'}));
-  a.leaveDropped.forEach(x => noteRows.push({구분:'연차신청 제외(대기/승인아님)', 내용:`${x.name} ${x.sabun} ${x.status} ${x.start}`}));
-  if (noteRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(noteRows), '참고_제외내역');
-
-  const fname = `제니엘_상담사_근태분석_${a.year}${pad2(a.month)}_기준${a.cutoffIso.replace(/-/g,'')}.xlsx`;
+  const fname = `${a.year}년_${pad2(a.month)}월분_출퇴근현황_전자랜드_${a.cutoffIso.replace(/-/g,'')}.xlsx`;
   XLSX.writeFile(wb, fname);
 }
 
@@ -2005,7 +2004,7 @@ function renderEmployeeTab(){
       <td class="mono">${escapeHtml(l.applyDate)}</td>
       <td>${escapeHtml(l.start)}${l.start!==l.end?' ~ '+escapeHtml(l.end):''}</td>
       <td>${escapeHtml(l.amount)}</td>
-      <td>${escapeHtml(l.kind)}</td>
+      <td>${escapeHtml(leaveKindDisplay(l.kind, l.amount))}</td>
       <td><span class="tag tag-status-${escapeHtml(l.status)}">${escapeHtml(l.status)}</span></td>
       <td>${escapeHtml(l.reflected)}</td>
       <td class="wrap">${escapeHtml(l.note)}</td>
@@ -2636,9 +2635,18 @@ function judgeDay(planCode, hasActual, leaveEntries, isFuture){
   const isWork = WORK_CODES.includes(code);
   const isEdu  = EDU_CODES.includes(code);
   const isOff  = OFF_CODES.includes(code);
-  const isLeave= LEAVE_CODES.includes(code);
+  const isHalfDayCode = (code === '오전반차' || code === '오후반차');
+  const isFullDayCode = (code === '연차');
   const hasLeaveReq = leaveEntries && leaveEntries.length > 0;
   const leaveHasApproved = hasLeaveReq && leaveEntries.some(e=>e.status==='승인');
+  // 연차신청 파일의 사용갯수가 0.5로 찍힌 건은 반차로 간주한다 — 휴가구분이 그냥
+  // "연차"로만 되어 있어도(별도 "반차" 구분값이 없는 파일 구조), 실제로는 반차 신청인
+  // 경우가 있기 때문이다.
+  const leaveAmountIsHalf = hasLeaveReq && leaveEntries.some(e => {
+    const amt = parseFloat(e.amount);
+    return !isNaN(amt) && Math.abs(amt - 0.5) < 1e-9;
+  });
+  const isHalfDayLeave = !isWork && !isEdu && !isOff && (isHalfDayCode || leaveAmountIsHalf);
 
   if (isWork || isEdu){
     if (hasActual) return isEdu ? 'work_ok_edu' : 'work_ok';
@@ -2651,7 +2659,19 @@ function judgeDay(planCode, hasActual, leaveEntries, isFuture){
     if (isFuture) return 'future';
     return 'off_ok';
   }
-  if (isLeave){
+  if (isHalfDayLeave){
+    // 반차는 하루의 절반만 쉬는 것이므로, 나머지 절반은 실제 출근 기록이 있어야
+    // "정상출근(반차)"이고, 그 기록조차 없으면 결근으로 본다.
+    if (hasLeaveReq){
+      if (!leaveHasApproved) return 'leave_pending';
+      if (hasActual) return 'half_day_ok';
+      if (isFuture) return 'future';
+      return 'half_day_absent';
+    }
+    if (isFuture) return 'future';
+    return 'leave_unmatched';
+  }
+  if (isFullDayCode){
     if (hasLeaveReq) return leaveHasApproved ? 'leave_ok' : 'leave_pending';
     if (isFuture) return 'future';
     return 'leave_unmatched';
@@ -2713,7 +2733,7 @@ function buildAnalysis(planData, attendData, leaveData, matchData){
       manager: orgInfo ? orgInfo.manager : '미매칭',
       days: [],
       counts: {},
-      usage: { annualUsed: 0, offUsed: 0, substituteUsed: 0, subBreakdown: { sub: 0, comp: 0 } },
+      usage: { annualUsed: 0, offUsed: 0, substituteUsed: 0, subBreakdown: { sub: 0, comp: 0 }, annualBreakdown: { full: 0, half: 0 } },
     };
 
     // 휴무/대체휴무/연차 사용일수는 아래 일자별 루프에서 "실제로 쉰 날"(판정 결과) 기준으로
@@ -2739,8 +2759,22 @@ function buildAnalysis(planData, attendData, leaveData, matchData){
       // in (i.e. it would otherwise show as 결근), treat it as 대체휴무 used instead.
       if (!isFuture){
         const c = (planCode||'').trim();
-        if (c === '연차') empOut.usage.annualUsed += 1;
-        else if (c === '오전반차' || c === '오후반차') empOut.usage.annualUsed += 0.5;
+        const leaveApproved = leaveEntries && leaveEntries.some(le => le.status === '승인');
+        if (c === '연차'){
+          // 사용갯수 0.5로 찍힌 반차가 스케줄엔 그냥 "연차"로만 적혀 있는 경우가 있어,
+          // judgeDay가 반차로 판단했으면(half_day_*) 0.5일로, 아니면 1일로 집계한다.
+          // 승인된 신청 건만 "사용"으로 집계하고, 대기중이거나 신청 자체가 없는 경우는
+          // 아직 사용으로 치지 않는다 (반차인데 결근이어도, 그 반차 자체는 승인돼 있었다면
+          // 사용으로 잡는다 — 나머지 반나절 결근 여부는 이상현황에서 별도로 확인됨).
+          if (leaveApproved){
+            const wasHalfDay = judgement === 'half_day_ok' || judgement === 'half_day_absent';
+            if (wasHalfDay){ empOut.usage.annualUsed += 0.5; empOut.usage.annualBreakdown.half += 0.5; }
+            else { empOut.usage.annualUsed += 1; empOut.usage.annualBreakdown.full += 1; }
+          }
+        }
+        else if (c === '오전반차' || c === '오후반차'){
+          if (leaveApproved){ empOut.usage.annualUsed += 0.5; empOut.usage.annualBreakdown.half += 0.5; }
+        }
         else if (c === '휴무'){
           if (judgement === 'off_ok') empOut.usage.offUsed += 1;
         } else if (c === '대체휴일(1일)'){
@@ -2831,9 +2865,10 @@ function buildAnalysis(planData, attendData, leaveData, matchData){
     const perDay = (!isNaN(amountNum) && numDays > 0) ? (amountNum / numDays) : entry.amount;
     while (cur <= entry.end && guard < 60){
       const dObj = isoToDateObj(cur);
+      const perDayAmount = (!isNaN(amountNum) && numDays > 0) ? (Math.round(perDay*10)/10) : perDay;
       leaveDaily.push(Object.assign({}, entry, {
         date: cur, weekday: WEEKDAYS_KR[dObj.getDay()],
-        perDayAmount: (!isNaN(amountNum) && numDays > 0) ? (Math.round(perDay*10)/10) : perDay,
+        perDayAmount,
       }));
       cur = isoAddDays(cur,1); guard++;
     }
@@ -2854,6 +2889,11 @@ function buildAnalysis(planData, attendData, leaveData, matchData){
     });
   }
 
+  // "근태RAW" 내보내기 시트용 — 우리 분석 범위(전자랜드)에 포함된 상담사의 원본 출퇴근
+  // 기록만 그대로 보존해둔다 (엑셀 다운로드 시 참조 파일의 "근태RAW" 시트와 같은 형태로 재구성).
+  const includedSabuns = new Set(employees.map(e => e.sabun));
+  const attendRecordsRaw = attendData.records.filter(r => includedSabuns.has(r.sabun));
+
   return {
     year, month, daysInMonth, maxDay, cutoffDay, cutoffIso,
     employees, dayMatrix, anomalies, leaveEnriched, leaveDaily, leaveOutOfScope,
@@ -2863,6 +2903,7 @@ function buildAnalysis(planData, attendData, leaveData, matchData){
     excludedByRoute,
     storeCountByArea: Object.fromEntries(storeCountByArea),
     totalElectrolandStores,
+    attendRecordsRaw,
     planSheet: planData.sheetName, attendSheet: attendData.sheetName,
     leaveSheet: leaveData.sheetName, matchSheet: matchData.sheetName,
     totalLeaveAll: leaveData.all.length, totalLeaveKept: leaveData.kept.length,
