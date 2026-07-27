@@ -134,8 +134,8 @@
   --purple-soft:#E9E6FC;
   --teal:#03C3B2;
   --teal-soft:#D7F4F0;
-  --brand-green:#14A45E;
-  --brand-green-soft:#DFF4E9;
+  --brand-blue:#1863DC;
+  --brand-blue-soft:#E1ECFC;
   --muted:#5B6B7D;
   --radius:10px;
   --shadow: 0 1px 2px rgba(16,25,43,0.06), 0 8px 24px -12px rgba(16,25,43,0.18);
@@ -172,7 +172,7 @@ header.topbar{
   position:sticky;
   top:0;
   z-index:50;
-  border-bottom:2px solid var(--brand-green);
+  border-bottom:2px solid var(--brand-blue);
   box-shadow:0 2px 14px -6px rgba(16,25,43,0.10);
 }
 .brand{display:flex; align-items:center; gap:16px;}
@@ -181,7 +181,7 @@ header.topbar{
 .brand-title-row{display:flex; align-items:center; gap:9px; flex-wrap:wrap;}
 .brand-slogan-badge{
   font-family:'IBM Plex Mono',monospace; font-size:10px; font-weight:600; letter-spacing:0.2px;
-  color:var(--brand-green); background:var(--brand-green-soft); padding:3px 9px; border-radius:99px;
+  color:var(--brand-blue); background:var(--brand-blue-soft); padding:3px 9px; border-radius:99px;
   white-space:nowrap;
 }
 .brand-text h1{font-size:18px; margin:0; font-weight:700; letter-spacing:-0.2px; color:var(--ink);}
@@ -204,12 +204,12 @@ a, .tab-btn, .btn, .quota-input, input, select{-webkit-tap-highlight-color:trans
 }
 .btn:active{transform:scale(0.97);}
 .btn:disabled{opacity:0.4; cursor:not-allowed;}
-.btn-primary{background:var(--brand-green); color:#fff; box-shadow:0 2px 8px -2px rgba(20,164,94,0.45);}
-.btn-primary:hover:not(:disabled){background:#0F8A4F;}
+.btn-primary{background:var(--brand-blue); color:#fff; box-shadow:0 2px 8px -2px rgba(24,99,220,0.35);}
+.btn-primary:hover:not(:disabled){background:#1350B0;}
 .btn-ghost{background:#F3F5F1; color:var(--ink-soft); border:1px solid var(--line);}
 .btn-ghost:hover:not(:disabled){background:#E7EAE3; color:var(--ink);}
 .btn-outline{background:#fff; color:var(--ink); border:1px solid var(--line);}
-.btn-outline:hover:not(:disabled){border-color:var(--brand-green); color:var(--brand-green);}
+.btn-outline:hover:not(:disabled){border-color:var(--brand-blue); color:var(--brand-blue);}
 .btn-sm{padding:6px 11px; font-size:12px;}
 
 /* ---------- Layout ---------- */
@@ -261,7 +261,7 @@ main{max-width:1360px; margin:0 auto; padding:26px 28px 80px;}
   border-bottom:2.5px solid transparent; white-space:nowrap; margin-bottom:-1.5px; transition:color .15s ease, border-color .15s ease;
 }
 .tab-btn:hover{color:var(--ink);}
-.tab-btn.active{color:var(--brand-green); border-bottom-color:var(--brand-green);}
+.tab-btn.active{color:var(--brand-blue); border-bottom-color:var(--brand-blue);}
 .tab-panel{display:none;}
 .tab-panel.active{display:block;}
 
@@ -273,12 +273,19 @@ main{max-width:1360px; margin:0 auto; padding:26px 28px 80px;}
 @media (max-width:900px){.two-col-row{grid-template-columns:1fr;}}
 
 /* weekly schedule table */
+#weekTableWrap table th, #weekTableWrap table td{
+  text-align:center; border-right:1px solid var(--line-soft);
+}
+#weekTableWrap table th:last-child, #weekTableWrap table td:last-child{ border-right:none; }
 .wk-pill{display:inline-block; font-size:11.5px; font-weight:700; padding:5px 10px; border-radius:99px; white-space:nowrap;}
 .wk-work{background:var(--teal-soft); color:#0A8C7F;}
 .wk-off{background:#E7E9E4; color:#5B6459;}
 .wk-sub{background:#DCEEF5; color:#1D7A9C;}
 .wk-comp{background:#EAE3FA; color:#6B4FC7;}
 .wk-edu{background:#EAEAE6; color:#7C8378;}
+.wk-danger{background:var(--danger-soft); color:#C13F34;}
+.wk-row-clickable{cursor:pointer;}
+.wk-row-clickable:hover td{background:#F0F5FC;}
 .wk-blank{background:#F2F3F0; color:#B4B9AE; font-weight:500;}
 /* today column: border ring only — no background tint, so pill colors/text never wash out */
 td.wk-today-col{box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent);}
@@ -294,7 +301,7 @@ th.wk-today-col{background:var(--accent-soft); color:var(--accent); box-shadow: 
 .kpi.good .kpi-value{color:var(--accent);}
 
 .panel-card{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-bottom:18px; box-shadow:0 1px 3px rgba(16,25,43,0.04);}
-.panel-card h3{margin:0 0 14px; font-size:14.5px; font-weight:700; padding-left:10px; border-left:3px solid var(--brand-green); letter-spacing:-0.1px;}
+.panel-card h3{margin:0 0 14px; font-size:14.5px; font-weight:700; padding-left:10px; border-left:3px solid var(--brand-blue); letter-spacing:-0.1px;}
 
 /* bar rows */
 .bar-row{display:grid; grid-template-columns:150px 1fr 60px; align-items:center; gap:10px; padding:7px 0; font-size:12.5px;}
@@ -481,7 +488,7 @@ footer.app-footer{text-align:center; padding:30px 20px 50px; color:var(--muted);
   border:1px solid var(--line); border-radius:99px; padding:7px 14px 7px 13px; background:#fbfcfb;
   white-space:nowrap; transition:box-shadow .15s ease, border-color .15s ease; cursor:pointer;
 }
-.mgr-chip:hover{border-color:var(--brand-green); box-shadow:0 2px 8px -3px rgba(16,25,43,0.15);}
+.mgr-chip:hover{border-color:var(--brand-blue); box-shadow:0 2px 8px -3px rgba(16,25,43,0.15);}
 .mgr-chip-name{font-weight:700; font-size:12.8px; color:var(--ink);}
 .mgr-chip-count{font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px; color:var(--ink); padding-left:2px;}
 .mgr-chip-count .unit{font-family:'IBM Plex Sans KR',sans-serif; font-weight:500; font-size:10.5px; color:var(--muted); margin-left:2px;}
@@ -1172,7 +1179,7 @@ function renderSummary(){
 }
 
 /* =========================================================================
-   주차별 상담사 주간근무계획표 (요약 탭 하단)
+   주차별 상담사 주간근무계획표 (주차별 휴무미준수 탭)
    ========================================================================= */
 function mondayOf(dateObj){
   const d = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
@@ -1233,16 +1240,63 @@ function weekPillStyle(code){
   return 'wk-pill wk-edu';
 }
 
-function getWeekFilteredEmployees(){
+// 이번 주(월~일)에 "휴무"를 몇 번 썼는지 센다 — 매장근무계획(스케줄)이 정확히 "휴무"이고,
+// 동시에 근태관리 파일에 그날 실제 출근기록이 없는 날짜만 "휴무 사용"으로 집계한다.
+// (스케줄엔 휴무인데 실제로 출근했다면 "쉰 게" 아니므로 제외, 반대로 스케줄이 "근무"인데
+// 결근한 경우는 휴무 사용이 아니라 결근(미출근·연차 미신청)으로 별도 분류되어야 하므로 여기서
+// 세지 않는다 — 이상현황 탭에서 확인된다.) 근무일과 달리 "휴무"는 출근 여부를 나중에 따로
+// 확인할 필요가 없는 계획이므로, 판정 기준일(cutoff) 이후에 예정된 휴무라도 스케줄에 이미
+// 잡혀 있으면 그대로 집계한다 — 그래야 화면에 보이는 "휴무" 표시 개수와 집계 숫자가 일치한다.
+function countPlainOffDaysInWeek(emp, weekDates){
+  let count = 0;
+  weekDates.forEach(wd => {
+    if (!wd.inMonth) return;
+    const dayRec = emp.days.find(d => d.day === wd.day);
+    if (!dayRec) return;
+    const code = (dayRec.planCode||'').trim();
+    if (code === '휴무' && !dayRec.actual) count++;
+  });
+  return count;
+}
+
+function getWeekFilteredEmployees(weekDates){
   const a = ANALYSIS;
   let emps = a.employees.slice().sort((x,y)=>x.name.localeCompare(y.name,'ko'));
-  if (WEEK_REGION_FILTER!=='전체') emps = emps.filter(e => e.area===WEEK_REGION_FILTER);
+  if (WEEK_REGION_FILTER!=='전체') emps = emps.filter(e => e.regionHead===WEEK_REGION_FILTER);
   if (WEEK_MANAGER_FILTER!=='전체') emps = emps.filter(e => e.manager===WEEK_MANAGER_FILTER);
   if (WEEK_SEARCH){
     const q = normName(WEEK_SEARCH).toLowerCase();
     emps = emps.filter(e => normName(e.name).toLowerCase().includes(q) || e.sabun.toLowerCase().includes(q) || normName(e.store).toLowerCase().includes(q));
   }
+  // 이번 주 "휴무"(연차/반차/대체휴무/보상휴가 제외) 사용이 2회 미만인 상담사만 보여준다.
+  emps = emps.filter(e => countPlainOffDaysInWeek(e, weekDates) < 2);
   return emps;
+}
+
+// 주차별 표에 보여줄 라벨 — 스케줄(계획)과 실제 출근기록을 함께 봐서 실제 상황을 그대로
+// 보여준다 (스케줄만 보여주면 "휴무인데 출근했다"거나 "근무인데 결근했다" 같은 상황이
+// 헷갈릴 수 있어서):
+//   - 스케줄 공란 + 실제출근 있음 → 근무
+//   - 스케줄 휴무 + 실제출근 있음 → 근무 (쉬기로 되어 있었는데 실제로 나와서 일함)
+//   - 스케줄 휴무 + 실제출근 없음 → 정상휴무
+//   - 스케줄 근무 + 실제출근 없음 → 결근(미출근,연차미신청)
+// 그 외(연차/반차/대체휴일/보상휴가/교육 등)는 원래 스케줄 코드를 그대로 보여준다.
+function weekCellDisplay(dayRec){
+  if (!dayRec) return { label:'-', cls:'wk-pill wk-blank' };
+  const code = (dayRec.planCode||'').trim();
+  // 아직 지나지 않은 예정일은 실제 출근 여부를 알 수 없으니(당연히 근태 기록이 없음),
+  // "결근"이나 "정상휴무"로 단정짓지 않고 근무계획 스케줄을 그대로 보여준다.
+  if (dayRec.judgement === 'future'){
+    if (!code) return { label:'-', cls:'wk-pill wk-blank' };
+    return { label:code, cls:weekPillStyle(code) };
+  }
+  const hasActual = !!dayRec.actual;
+  if (!code && hasActual) return { label:'근무', cls:'wk-pill wk-work' };
+  if (code === '휴무' && hasActual) return { label:'근무', cls:'wk-pill wk-work' };
+  if (code === '휴무' && !hasActual) return { label:'정상휴무', cls:'wk-pill wk-off' };
+  if ((code === '근무' || code === '근무A') && !hasActual) return { label:'결근(미출근,연차미신청)', cls:'wk-pill wk-danger' };
+  if (!code) return { label:'-', cls:'wk-pill wk-blank' };
+  return { label:code, cls:weekPillStyle(code) };
 }
 
 function buildWeekTableRowsHtml(weekDates, emps){
@@ -1251,17 +1305,16 @@ function buildWeekTableRowsHtml(weekDates, emps){
     const cells = weekDates.map(wd => {
       if (!wd.inMonth) return `<td class="${wd.isToday?'wk-today-col':''}"><span class="wk-pill wk-blank">-</span></td>`;
       const dayRec = e.days.find(d => d.day === wd.day);
-      const code = dayRec ? (dayRec.planCode||'') : '';
-      if (!code) return `<td class="${wd.isToday?'wk-today-col':''}"><span class="wk-pill wk-blank">-</span></td>`;
-      return `<td class="${wd.isToday?'wk-today-col':''}"><span class="${weekPillStyle(code)}">${escapeHtml(code)}</span></td>`;
+      const { label, cls } = weekCellDisplay(dayRec);
+      return `<td class="${wd.isToday?'wk-today-col':''}"><span class="${cls}">${escapeHtml(label)}</span></td>`;
     }).join('');
-    return `<tr><td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.store)}</td>${cells}</tr>`;
+    return `<tr class="wk-row-clickable" data-sabun="${escapeHtml(e.sabun)}" title="${escapeHtml(e.name)} 상세 보기"><td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.store)}</td>${cells}</tr>`;
   }).join('');
 }
 
 function updateWeekBody(){
   const weekDates = getWeekDates();
-  const emps = getWeekFilteredEmployees();
+  const emps = getWeekFilteredEmployees(weekDates);
   const tbody = document.getElementById('weekTbody');
   if (tbody) tbody.innerHTML = buildWeekTableRowsHtml(weekDates, emps);
   const pill = document.getElementById('weekCountPill');
@@ -1271,42 +1324,38 @@ function updateWeekBody(){
 function renderWeeklyScheduleHtml(){
   const a = ANALYSIS;
   const weekDates = getWeekDates();
-  const emps = getWeekFilteredEmployees();
+  const emps = getWeekFilteredEmployees(weekDates);
 
-  // "오늘" 스냅샷 KPI — 필터와 무관하게 전체 기준. 하이라이트된 열(오늘 컬럼)과
-  // 반드시 같은 날짜를 기준으로 집계한다.
-  const anchorIso = getWeekAnchorIso();
-  const anchorDay = Number(anchorIso.slice(8,10));
-  let workCnt=0, offCnt=0, eduCnt=0;
-  a.employees.forEach(e => {
-    const dayRec = e.days.find(d => d.day === anchorDay);
-    const cat = scheduleCategory(dayRec ? dayRec.planCode : '');
-    if (cat==='work') workCnt++; else if (cat==='off') offCnt++; else eduCnt++;
-  });
+  // 이번 주 기준 "휴무 2회 미만" 상담사 수(전체 상담사 대상, 지역/담당자/검색 필터와 무관)
+  let flaggedCnt = 0;
+  a.employees.forEach(e => { if (countPlainOffDaysInWeek(e, weekDates) < 2) flaggedCnt++; });
+  const totalCnt = a.employees.length;
+  const compliantPct = totalCnt ? ((totalCnt-flaggedCnt)/totalCnt*100) : 0;
 
-  const areas = Array.from(new Set(a.employees.map(e=>e.area).filter(Boolean))).sort((x,y)=>x.localeCompare(y,'ko'));
+  const regionHeads = Array.from(new Set(a.employees.map(e=>e.regionHead).filter(Boolean))).sort((x,y)=>x.localeCompare(y,'ko'));
   const managers = Array.from(new Set(a.employees.map(e=>e.manager))).sort((x,y)=>x.localeCompare(y,'ko'));
   const weekLabel = `${weekDates[0].iso.slice(5).replace('-','/')} ~ ${weekDates[6].iso.slice(5).replace('-','/')}`;
 
   return `
     <div class="panel-card" id="weekSection">
-      <h3>주차별 상담사 주간근무계획표</h3>
+      <h3>주차별 휴무 미준수 상담사(주2회 미만)</h3>
+      <p class="section-sub" style="margin:-6px 0 12px;">스케줄이 "휴무"이면서 근태관리 파일에 실제 출근기록도 없는 날만 "휴무 사용"으로 집계합니다. 스케줄이 근무인데 결근한 경우는 휴무가 아니라 결근(이상현황 탭 참고)으로 별도 처리됩니다.</p>
       <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr); margin-bottom:16px;">
-        <div class="kpi good"><div class="kpi-label">오늘(${anchorIso}) 근무</div><div class="kpi-value">${workCnt}명</div></div>
-        <div class="kpi"><div class="kpi-label">오늘 휴무/연차</div><div class="kpi-value">${offCnt}명</div></div>
-        <div class="kpi"><div class="kpi-label">오늘 교육/기타</div><div class="kpi-value">${eduCnt}명</div></div>
+        <div class="kpi warn"><div class="kpi-label">이번 주 휴무 2회 미만</div><div class="kpi-value">${flaggedCnt}명</div></div>
+        <div class="kpi"><div class="kpi-label">전체 상담사</div><div class="kpi-value">${totalCnt}명</div></div>
+        <div class="kpi good"><div class="kpi-label">휴무 2회 이상 준수율</div><div class="kpi-value">${fmtPct(compliantPct)}</div></div>
       </div>
 
       <div class="filter-row">
         <button class="btn btn-outline btn-sm" id="weekPrevBtn">◂ 이전 주</button>
         <span class="count-pill mono" id="weekRangeLabel">${weekLabel}</span>
         <button class="btn btn-outline btn-sm" id="weekNextBtn">다음 주 ▸</button>
-        <label>지역</label>
+        <label>지역장</label>
         <select id="weekRegionFilter">
           <option value="전체">전체</option>
-          ${areas.map(ar=>`<option value="${escapeHtml(ar)}" ${WEEK_REGION_FILTER===ar?'selected':''}>${escapeHtml(ar)}</option>`).join('')}
+          ${regionHeads.map(rh=>`<option value="${escapeHtml(rh)}" ${WEEK_REGION_FILTER===rh?'selected':''}>${escapeHtml(rh)}</option>`).join('')}
         </select>
-        <label>담당자</label>
+        <label>매니저</label>
         <select id="weekMgrFilter">
           <option value="전체">전체</option>
           ${managers.map(m=>`<option value="${escapeHtml(m)}" ${WEEK_MANAGER_FILTER===m?'selected':''}>${escapeHtml(m)}</option>`).join('')}
@@ -1339,6 +1388,21 @@ function bindWeeklyScheduleEvents(){
   const searchEl = document.getElementById('weekSearch');
   bindSearchInput(searchEl, val => { WEEK_SEARCH = val; updateWeekBody(); });
   fitWeekTableToRows(5);
+
+  // 표 안의 상담사 행을 클릭하면 상담사별 상세로 이동 — tbody가 검색/필터로 다시 그려져도
+  // 계속 동작하도록 바깥쪽 고정 컨테이너(table-wrap)에 이벤트 위임으로 한 번만 건다.
+  const wrap = document.getElementById('weekTableWrap');
+  if (wrap && !wrap.dataset.clickBound){
+    wrap.dataset.clickBound = '1';
+    wrap.addEventListener('click', e => {
+      const row = e.target.closest('.wk-row-clickable');
+      if (!row) return;
+      ACTIVE_EMP = row.dataset.sabun;
+      EMP_MANAGER_FILTER = '전체';
+      document.querySelector('.tab-btn[data-tab="employee"]').click();
+      renderEmployeeTab();
+    });
+  }
 }
 
 // sizes the scroll box to show exactly N counselor rows (plus header), so the box
@@ -2472,7 +2536,7 @@ function renderAdminHeaderControl(){
   if (!el) return;
   if (IS_ADMIN){
     el.innerHTML = `
-      <span class="badge" style="background:rgba(3,195,178,0.18); border-color:rgba(3,195,178,0.35);">● 관리자 모드</span>
+      <span class="badge" style="background:rgba(24,99,220,0.14); border-color:rgba(24,99,220,0.35); color:var(--brand-blue);">● 관리자 모드</span>
       <button class="btn btn-ghost btn-sm" id="hdrReuploadBtn">${ANALYSIS ? '◂ 파일 다시 업로드' : '업로드 화면 열기'}</button>
       <button class="btn btn-outline btn-sm" id="hdrLogoutBtn">로그아웃</button>
     `;
