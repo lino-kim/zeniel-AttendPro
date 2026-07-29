@@ -1015,9 +1015,52 @@ function initTabs(){
       document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('panel-'+btn.dataset.tab).classList.add('active');
+      pushViewState();
     });
   });
 }
+
+// PC 웹에서 브라우저 "뒤로 가기"를 눌렀을 때, 예를 들어 요약 → 매니저 클릭 → 상담사별 상세로
+// 넘어간 뒤 뒤로 가면 다시 요약 화면으로 돌아오도록 탭 이동마다 히스토리를 기록해둔다.
+function currentViewState(){
+  const activeBtn = document.querySelector('.tab-btn.active');
+  return {
+    zenielView: true,
+    tab: activeBtn ? activeBtn.dataset.tab : 'summary',
+    activeEmp: ACTIVE_EMP,
+    empManagerFilter: EMP_MANAGER_FILTER,
+    weekOffset: WEEK_OFFSET,
+  };
+}
+
+function pushViewState(){
+  if (!ANALYSIS) return;
+  const state = currentViewState();
+  try { history.pushState(state, '', '#' + state.tab); } catch(e){ /* 일부 환경에서 history API가 막혀 있을 수 있음 */ }
+}
+
+function applyViewState(state){
+  if (!state || !state.zenielView || !ANALYSIS) return;
+  ACTIVE_EMP = state.activeEmp ?? ACTIVE_EMP;
+  EMP_MANAGER_FILTER = state.empManagerFilter ?? EMP_MANAGER_FILTER;
+  WEEK_OFFSET = typeof state.weekOffset === 'number' ? state.weekOffset : WEEK_OFFSET;
+  const tab = state.tab || 'summary';
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+  const panel = document.getElementById('panel-'+tab);
+  if (btn) btn.classList.add('active');
+  if (panel) panel.classList.add('active');
+  // 복원된 필터/선택값이 실제로 화면에 반영되도록 해당 탭만 다시 그린다.
+  if (tab === 'employee') renderEmployeeTab();
+  else if (tab === 'summary') renderSummary();
+  else if (tab === 'org') renderOrg();
+  else if (tab === 'anomaly') renderAnomaly();
+  else if (tab === 'leave') renderLeave();
+  else if (tab === 'quota') renderQuotaTab();
+}
+
+window.addEventListener('popstate', e => { applyViewState(e.state); });
 
 function renderAll(){
   renderSummary();
@@ -1247,16 +1290,32 @@ function weekPillStyle(code){
 // 세지 않는다 — 이상현황 탭에서 확인된다.) 근무일과 달리 "휴무"는 출근 여부를 나중에 따로
 // 확인할 필요가 없는 계획이므로, 판정 기준일(cutoff) 이후에 예정된 휴무라도 스케줄에 이미
 // 잡혀 있으면 그대로 집계한다 — 그래야 화면에 보이는 "휴무" 표시 개수와 집계 숫자가 일치한다.
-function countPlainOffDaysInWeek(emp, weekDates){
-  let count = 0;
+// 이번 주(월~일) 휴무 준수 여부를 판단한다. 규칙:
+//   - 정상휴무(스케줄 휴무 + 실제 미출근) 2회 이상 → 준수
+//   - 정상휴무 1회 + (연차 또는 대체휴일(1일)/보상휴가(1일)) 1회 이상 → 준수
+//   - 정상휴무가 아예 0회면, 연차/대체휴무가 아무리 많아도 → 미준수 (정상휴무가 최소 1회는
+//     반드시 있어야 준수로 인정한다)
+// 반차·0.5일 유형(대체휴일 0.5일/보상휴가 0.5일 포함)은 온전한 휴무가 아니라 집계에서 제외하고,
+// 스케줄상 해당 유형이어도 실제로 출근한 기록이 있으면 쉰 게 아니므로 제외한다.
+function getWeeklyRestBreakdown(emp, weekDates){
+  let off = 0, annualOrSub = 0;
   weekDates.forEach(wd => {
     if (!wd.inMonth) return;
     const dayRec = emp.days.find(d => d.day === wd.day);
     if (!dayRec) return;
+    if (dayRec.actual) return; // 실제로 출근했으면 쉰 게 아니므로 제외
     const code = (dayRec.planCode||'').trim();
-    if (code === '휴무' && !dayRec.actual) count++;
+    if (code === '휴무') off++;
+    else if (code === '연차' || code === '대체휴일(1일)' || code === '보상휴가(1일)') annualOrSub++;
   });
-  return count;
+  return { off, annualOrSub };
+}
+
+function isWeeklyRestCompliant(emp, weekDates){
+  const { off, annualOrSub } = getWeeklyRestBreakdown(emp, weekDates);
+  if (off >= 2) return true;
+  if (off >= 1 && annualOrSub >= 1) return true;
+  return false;
 }
 
 function getWeekFilteredEmployees(weekDates){
@@ -1269,7 +1328,7 @@ function getWeekFilteredEmployees(weekDates){
     emps = emps.filter(e => normName(e.name).toLowerCase().includes(q) || e.sabun.toLowerCase().includes(q) || normName(e.store).toLowerCase().includes(q));
   }
   // 이번 주 "휴무"(연차/반차/대체휴무/보상휴가 제외) 사용이 2회 미만인 상담사만 보여준다.
-  emps = emps.filter(e => countPlainOffDaysInWeek(e, weekDates) < 2);
+  emps = emps.filter(e => !isWeeklyRestCompliant(e, weekDates));
   return emps;
 }
 
@@ -1328,7 +1387,7 @@ function renderWeeklyScheduleHtml(){
 
   // 이번 주 기준 "휴무 2회 미만" 상담사 수(전체 상담사 대상, 지역/담당자/검색 필터와 무관)
   let flaggedCnt = 0;
-  a.employees.forEach(e => { if (countPlainOffDaysInWeek(e, weekDates) < 2) flaggedCnt++; });
+  a.employees.forEach(e => { if (!isWeeklyRestCompliant(e, weekDates)) flaggedCnt++; });
   const totalCnt = a.employees.length;
   const compliantPct = totalCnt ? ((totalCnt-flaggedCnt)/totalCnt*100) : 0;
 
@@ -1339,7 +1398,7 @@ function renderWeeklyScheduleHtml(){
   return `
     <div class="panel-card" id="weekSection">
       <h3>주차별 휴무 미준수 상담사(주2회 미만)</h3>
-      <p class="section-sub" style="margin:-6px 0 12px;">스케줄이 "휴무"이면서 근태관리 파일에 실제 출근기록도 없는 날만 "휴무 사용"으로 집계합니다. 스케줄이 근무인데 결근한 경우는 휴무가 아니라 결근(이상현황 탭 참고)으로 별도 처리됩니다.</p>
+      <p class="section-sub" style="margin:-6px 0 12px;">정상휴무 2회 이상, 또는 정상휴무 1회+연차·대체휴일(1일)·보상휴가(1일) 1회 이상이면 준수로 봅니다. 정상휴무가 한 번도 없으면 연차·대체휴무만 있어도 미준수로 표시됩니다 (반차·0.5일 유형은 온전한 휴무가 아니라 제외). 스케줄이 근무인데 결근한 경우는 휴무가 아니라 결근(이상현황 탭 참고)으로 별도 처리됩니다.</p>
       <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr); margin-bottom:16px;">
         <div class="kpi warn"><div class="kpi-label">이번 주 휴무 2회 미만</div><div class="kpi-value">${flaggedCnt}명</div></div>
         <div class="kpi"><div class="kpi-label">전체 상담사</div><div class="kpi-value">${totalCnt}명</div></div>
@@ -2444,6 +2503,7 @@ function runAnalysis(){
       document.getElementById('resultSection').style.display = 'block';
       renderTopbarActions();
       renderAll();
+      try { history.replaceState(currentViewState(), '', '#summary'); } catch(e){}
       window.scrollTo({top:0, behavior:'smooth'});
       await saveSharedData(true);
       showFileMetaModal(true);
@@ -2697,6 +2757,7 @@ async function initApp(){
     document.getElementById('resultSection').style.display = 'block';
     renderTopbarActions();
     renderAll();
+    try { history.replaceState(currentViewState(), '', '#summary'); } catch(e){}
   } else if (!STORAGE_AVAILABLE){
     // no shared storage in this context (e.g. opened as a local file) — behave as a
     // single-user local tool: skip the admin gate and go straight to upload.
