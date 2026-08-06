@@ -6,7 +6,7 @@
 <title>제니엘 전자랜드 상담사 근태 점검 시스템</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
 
 <!-- =====================================================================
      FIREBASE (선택사항) — Claude.ai 밖(GitHub Pages 등)에서 "관리자 업로드 →
@@ -2389,8 +2389,10 @@ function monthGridCellDisplay(dayRec){
     return { label: code, cls: 'mg-future' };
   }
   const hasActual = !!dayRec.actual;
-  if (!code && hasActual) return { label:'근무', cls:'mg-work' };
-  if (code === '휴무' && hasActual) return { label:'근무', cls:'mg-work' };
+  // 상담사별 상세 캘린더처럼, 실제 출근 기록이 있으면 원래 스케줄이 무엇이었든(공란/휴무/근무 등)
+  // 항상 "근무"로 일관되게 표시한다 — 스케줄에 따라 어떤 날은 표시되고 어떤 날은 비어있는
+  // 불일치가 없도록 한다.
+  if (hasActual) return { label:'근무', cls:'mg-work' };
   if (code === '휴무' && !hasActual) return { label:'정상휴무', cls:'mg-off' };
   if ((code === '근무' || code === '근무A') && !hasActual) return { label:'결근', cls:'mg-absent' };
   if (code === '연차' && !hasActual) return { label:'연차', cls:'mg-annual' };
@@ -2501,6 +2503,44 @@ function buildMgrWeekAccordionHtml(weeks, emps){
 // 현재 필터(매니저/검색) 기준으로 보이는 상담사들의 이번 달 전체 근태표를 엑셀로 내보낸다 —
 // 화면과 동일한 판정 방식(monthGridCellDisplay)을 쓰고, 온전한 월~일 주차에 대해서만
 // 휴무 준수 여부 컬럼을 추가한다(부분 주는 판정에서 제외).
+// 화면의 상태별 배경/글자색을 엑셀 셀 스타일로 그대로 옮긴다 (mg-* CSS 클래스와 짝을 맞춤).
+const MG_EXPORT_COLORS = {
+  'mg-off':    { bg:'E7E9E4', fg:'5B6459' },
+  'mg-annual': { bg:'DCF0DF', fg:'2E7D3C' },
+  'mg-sub':    { bg:'DCEEF5', fg:'1D7A9C' },
+  'mg-half':   { bg:'FCEED0', fg:'B96A28' },
+  'mg-absent': { bg:'FBE1DE', fg:'C13F34' },
+  'mg-work':   { bg:'D7F4F0', fg:'0A8C7F' },
+  'mg-future': { bg:'FAFBF9', fg:'A8AD9F' },
+  'mg-edu':    { bg:'EAEAE6', fg:'7C8378' },
+  '':          { bg:'FFFFFF', fg:'333333' },
+};
+function mgExcelDayCell(label, cls){
+  const c = MG_EXPORT_COLORS[cls] || MG_EXPORT_COLORS[''];
+  return { v: label || '', t:'s', s:{
+    fill:{ patternType:'solid', fgColor:{ rgb:c.bg } },
+    font:{ color:{ rgb:c.fg }, bold:!!label, sz:10 },
+    alignment:{ horizontal:'center', vertical:'center' },
+    border:{ top:{style:'thin',color:{rgb:'DDDDD8'}}, bottom:{style:'thin',color:{rgb:'DDDDD8'}}, left:{style:'thin',color:{rgb:'DDDDD8'}}, right:{style:'thin',color:{rgb:'DDDDD8'}} },
+  }};
+}
+function mgExcelTextCell(v, opts){
+  opts = opts || {};
+  return { v: v==null?'':v, t: typeof v==='number'?'n':'s', s:{
+    font:{ bold: !!opts.bold, color:{ rgb: opts.color||'222222' }, sz: opts.sz||10.5 },
+    fill: opts.bg ? { patternType:'solid', fgColor:{ rgb: opts.bg } } : undefined,
+    alignment:{ horizontal: opts.center?'center':'left', vertical:'center' },
+    border:{ top:{style:'thin',color:{rgb:'DDDDD8'}}, bottom:{style:'thin',color:{rgb:'DDDDD8'}}, left:{style:'thin',color:{rgb:'DDDDD8'}}, right:{style:'thin',color:{rgb:'DDDDD8'}} },
+  }};
+}
+
+// 현재 필터(매니저/검색) 기준으로 보이는 상담사들의 이번 달 전체 근태표를 엑셀로 내보낸다 —
+// 화면과 동일한 판정 방식(monthGridCellDisplay)과 색상을 그대로 쓰고, 헤더에 자동 필터를 걸어
+// 엑셀에서 담당매니저/매장 등으로 바로 필터링할 수 있게 하며, 온전한 월~일 주차에 대해서만
+// 휴무 준수 여부 컬럼을 추가한다(부분 주는 판정에서 제외). 매니저별(또는 매장별) 준수 현황을
+// 한눈에 보는 피벗 스타일 요약 시트도 같이 넣는다 — SheetJS 무료판은 엑셀 "진짜" 피벗테이블
+// 객체까지는 못 만들어서, 미리 집계한 표로 같은 역할을 하게 했다. 원본 데이터 시트 자체도
+// 표 형태로 깨끗하게 정리되어 있어서, 엑셀에서 직접 삽입 > 피벗 테이블로 다시 만들 수도 있다.
 function exportMgrDetailExcel(){
   const a = ANALYSIS;
   const weeks = computeMonthWeeks(a);
@@ -2509,23 +2549,84 @@ function exportMgrDetailExcel(){
 
   const fullWeeks = weeks.map((week, wi) => ({ week, wi, isFull: week.every(d => d.inMonth) })).filter(w => w.isFull);
 
-  const rows = emps.map(e => {
-    const row = { 매장명: e.store, 사번: e.sabun, 상담사: e.name, 담당매니저: e.manager };
+  // ---- 시트 1: N월 근태 (원본 상세, 색상 + 자동 필터) ----
+  const headerLabels = ['매장명','사번','상담사','담당매니저'];
+  for (let d=1; d<=a.daysInMonth; d++){
+    const iso = isoFromParts(a.year, a.month, d);
+    const wd = WEEKDAYS_KR[isoToDateObj(iso).getDay()];
+    headerLabels.push(`${a.month}/${d}(${wd})`);
+  }
+  fullWeeks.forEach(({wi}) => headerLabels.push(`${wi+1}주 휴무준수`));
+  const headerRow = headerLabels.map(h => mgExcelTextCell(h, { bold:true, color:'FFFFFF', bg:'2A3648', center:true }));
+
+  const dataRows = emps.map(e => {
+    const row = [
+      mgExcelTextCell(e.store),
+      mgExcelTextCell(e.sabun),
+      mgExcelTextCell(e.name, { bold:true }),
+      mgExcelTextCell(e.manager),
+    ];
     for (let d=1; d<=a.daysInMonth; d++){
-      const iso = isoFromParts(a.year, a.month, d);
-      const wd = WEEKDAYS_KR[isoToDateObj(iso).getDay()];
       const dayRec = e.days.find(x => x.day === d);
-      const { label } = monthGridCellDisplay(dayRec);
-      row[`${a.month}/${d}(${wd})`] = label;
+      const { label, cls } = monthGridCellDisplay(dayRec);
+      row.push(mgExcelDayCell(label, cls));
     }
-    fullWeeks.forEach(({week, wi}) => {
-      row[`${wi+1}주 휴무준수`] = isWeeklyRestCompliant(e, week) ? '준수' : '미준수';
+    fullWeeks.forEach(({week}) => {
+      const compliant = isWeeklyRestCompliant(e, week);
+      row.push(mgExcelTextCell(compliant ? '준수' : '미준수', { bold:true, center:true, color: compliant?'0A8C7F':'C13F34', bg: compliant?'D7F4F0':'FBE1DE' }));
     });
     return row;
   });
 
+  const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:dataRows.length, c:headerLabels.length-1} }) };
+  ws['!cols'] = [ {wch:14}, {wch:10}, {wch:10}, {wch:10} ].concat(
+    headerLabels.slice(4).map(() => ({wch:9}))
+  );
+  ws['!rows'] = [{hpt:22}];
+
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), `${a.month}월 근태`);
+  XLSX.utils.book_append_sheet(wb, ws, `${a.month}월 근태`);
+
+  // ---- 시트 2: 요약(피벗형) — 매니저 전체 보기면 매니저별, 특정 매니저 선택 중이면 매장별로
+  // 대상인원/미준수인원/준수율을 주차별로 모아 보여준다 ----
+  const groupKey = (MGRDETAIL_MANAGER === '전체') ? 'manager' : 'store';
+  const groupLabel = groupKey === 'manager' ? '담당매니저' : '매장명';
+  const groups = Array.from(new Set(emps.map(e => e[groupKey] || '미매칭'))).sort((x,y)=>x.localeCompare(y,'ko'));
+
+  const summaryHeaderLabels = [groupLabel, '대상인원'];
+  fullWeeks.forEach(({wi}) => summaryHeaderLabels.push(`${wi+1}주 미준수`, `${wi+1}주 준수율`));
+  const summaryHeaderRow = summaryHeaderLabels.map(h => mgExcelTextCell(h, { bold:true, color:'FFFFFF', bg:'2A3648', center:true }));
+
+  const summaryRows = groups.map(g => {
+    const groupEmps = emps.filter(e => (e[groupKey]||'미매칭') === g);
+    const row = [ mgExcelTextCell(g, {bold:true}), mgExcelTextCell(groupEmps.length, {center:true}) ];
+    fullWeeks.forEach(({week}) => {
+      const nonCompliant = groupEmps.filter(e => !isWeeklyRestCompliant(e, week)).length;
+      const rate = groupEmps.length ? Math.round((groupEmps.length-nonCompliant)/groupEmps.length*1000)/10 : 0;
+      row.push(
+        mgExcelTextCell(nonCompliant, { center:true, bold: nonCompliant>0, color: nonCompliant>0?'C13F34':'333333' }),
+        mgExcelTextCell(`${rate}%`, { center:true })
+      );
+    });
+    return row;
+  });
+  // 합계 행
+  const totalRow = [ mgExcelTextCell('전체 합계', {bold:true, bg:'EEF0EA'}), mgExcelTextCell(emps.length, {center:true, bold:true, bg:'EEF0EA'}) ];
+  fullWeeks.forEach(({week}) => {
+    const nonCompliant = emps.filter(e => !isWeeklyRestCompliant(e, week)).length;
+    const rate = emps.length ? Math.round((emps.length-nonCompliant)/emps.length*1000)/10 : 0;
+    totalRow.push(
+      mgExcelTextCell(nonCompliant, { center:true, bold:true, bg:'EEF0EA', color: nonCompliant>0?'C13F34':'333333' }),
+      mgExcelTextCell(`${rate}%`, { center:true, bold:true, bg:'EEF0EA' })
+    );
+  });
+
+  const wsSummary = XLSX.utils.aoa_to_sheet([summaryHeaderRow, ...summaryRows, totalRow]);
+  wsSummary['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:summaryRows.length, c:summaryHeaderLabels.length-1} }) };
+  wsSummary['!cols'] = [ {wch:16}, {wch:10} ].concat(fullWeeks.flatMap(()=>[{wch:10},{wch:10}]));
+  XLSX.utils.book_append_sheet(wb, wsSummary, '요약(피벗형)');
+
   const mgrLabel = (MGRDETAIL_MANAGER === '전체' ? '전체' : MGRDETAIL_MANAGER).replace(/[\\/:*?"<>|]/g,'');
   const fname = `제니엘_매니저별월간근태_${a.year}${pad2(a.month)}_${mgrLabel}_${a.cutoffIso.replace(/-/g,'')}.xlsx`;
   XLSX.writeFile(wb, fname);
@@ -2560,8 +2661,7 @@ function renderMgrDetailTab(){
         <div class="item"><span class="sw" style="background:#4E9F5C"></span><span style="color:#2E7D3C;font-weight:700;">연차</span></div>
         <div class="item"><span class="sw" style="background:#1D7A9C"></span><span style="color:#1D7A9C;font-weight:700;">대체휴무(대체휴일/보상휴가)</span></div>
         <div class="item"><span class="sw" style="background:#C13F34"></span><span style="color:#C13F34;font-weight:700;">결근</span></div>
-        <div class="item"><span class="sw" style="background:var(--teal-soft);"></span><span style="color:#0A8C7F;font-weight:700;">근무(스케줄과 다르게 실제 출근)</span></div>
-        <div class="item"><span class="sw" style="background:#fff;box-shadow:inset 0 0 0 1px var(--line);"></span><span style="color:var(--ink-soft);font-weight:700;">정상 근무(비움)</span></div>
+        <div class="item"><span class="sw" style="background:var(--teal-soft);"></span><span style="color:#0A8C7F;font-weight:700;">근무(실제 출근기록 있음)</span></div>
         <div class="item"><span class="sw" style="background:#EAEAE6"></span><span style="color:#7C8378;font-weight:700;">교육 등 기타 계획</span></div>
       </div>
 
