@@ -403,6 +403,12 @@ td.wrap, th.wrap{white-space:normal;}
 }
 .filter-row input[type="text"]{min-width:200px;}
 .filter-row label{font-size:11.5px; color:var(--muted); font-weight:600; margin-right:-4px;}
+.mg-noncompliant-toggle{
+  display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:#C13F34;
+  background:var(--danger-soft); border:1px solid #F0C6C1; border-radius:99px; padding:6px 12px;
+  cursor:pointer; user-select:none; margin-right:0 !important;
+}
+.mg-noncompliant-toggle input{cursor:pointer;}
 .count-pill{
   font-family:'IBM Plex Mono',monospace; font-size:11.5px; background:var(--paper); padding:5px 10px; border-radius:7px; color:var(--muted);
 }
@@ -536,6 +542,14 @@ footer.app-footer{text-align:center; padding:30px 20px 50px; color:var(--muted);
 
 /* manager summary — single clean horizontal strip */
 .chart-scroll{max-height:300px; overflow-y:auto; padding-right:4px;}
+.absent-row{
+  display:flex; align-items:center; gap:10px; padding:9px 8px; border-bottom:1px solid var(--line-soft);
+  cursor:pointer; transition:background .12s ease;
+}
+.absent-row:last-child{border-bottom:none;}
+.absent-row:hover{background:#FAF4F3;}
+.absent-name{font-weight:700; font-size:12.8px; color:var(--ink); flex:none;}
+.absent-meta{font-size:11px; color:var(--muted); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 .dist-grid-scroll{max-height:300px; overflow-y:auto; padding-right:4px;}
 .mgr-strip{display:flex; flex-wrap:wrap; gap:9px;}
 .mgr-chip{
@@ -544,6 +558,9 @@ footer.app-footer{text-align:center; padding:30px 20px 50px; color:var(--muted);
   white-space:nowrap; transition:box-shadow .15s ease, border-color .15s ease; cursor:pointer;
 }
 .mgr-chip:hover{border-color:var(--brand-blue); box-shadow:0 2px 8px -3px rgba(16,25,43,0.15);}
+.mgr-chip.active{border-color:var(--brand-blue); background:var(--brand-blue-soft);}
+.mgr-expand-panel{margin-top:14px; padding-top:14px; border-top:1px solid var(--line);}
+.mgr-expand-title{font-weight:700; font-size:12.8px; color:var(--ink); margin-bottom:10px; display:flex; align-items:center; gap:10px;}
 .mgr-chip-name{font-weight:700; font-size:12.8px; color:var(--ink);}
 .mgr-chip-count{font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px; color:var(--ink); padding-left:2px;}
 .mgr-chip-count .unit{font-family:'IBM Plex Sans KR',sans-serif; font-weight:500; font-size:10.5px; color:var(--muted); margin-left:2px;}
@@ -685,7 +702,6 @@ footer.app-footer{text-align:center; padding:30px 20px 50px; color:var(--muted);
   <section id="resultSection" style="display:none;">
     <div class="tabbar" id="tabbar">
       <button class="tab-btn active" data-tab="summary">요약</button>
-      <button class="tab-btn" data-tab="org">조직현황</button>
       <button class="tab-btn" data-tab="employee">상담사별 상세</button>
       <button class="tab-btn" data-tab="mgrdetail">매니저별 월간 근태</button>
       <button class="tab-btn" data-tab="anomaly">이상현황</button>
@@ -694,7 +710,6 @@ footer.app-footer{text-align:center; padding:30px 20px 50px; color:var(--muted);
     </div>
 
     <div class="tab-panel active" id="panel-summary"></div>
-    <div class="tab-panel" id="panel-org"></div>
     <div class="tab-panel" id="panel-employee"></div>
     <div class="tab-panel" id="panel-mgrdetail"></div>
     <div class="tab-panel" id="panel-anomaly"></div>
@@ -772,7 +787,11 @@ let WEEK_OFFSET = 0; // 0 = the week containing the analysis cutoff date
 let WEEK_REGION_FILTER = '전체';
 let WEEK_MANAGER_FILTER = '전체';
 let WEEK_SEARCH = '';
+let SUMMARY_EXPANDED_MGR = null; // 요약 탭의 "매니저별 요약"에서 펼쳐진 매니저(없으면 null)
+let ABSENT_MGR_FILTER = '전체';
+let ABSENT_SEARCH = '';
 let MGRDETAIL_MANAGER = '전체';
+let MGRDETAIL_NONCOMPLIANT_ONLY = false;
 let MGRDETAIL_EXPANDED_WEEKS = new Set();
 let MGRDETAIL_SEARCH = '';
 
@@ -1114,7 +1133,6 @@ function applyViewState(state){
   // 복원된 필터/선택값이 실제로 화면에 반영되도록 해당 탭만 다시 그린다.
   if (tab === 'employee') renderEmployeeTab();
   else if (tab === 'summary') renderSummary();
-  else if (tab === 'org') renderOrg();
   else if (tab === 'anomaly') renderAnomaly();
   else if (tab === 'leave') renderLeave();
   else if (tab === 'quota') renderQuotaTab();
@@ -1124,7 +1142,6 @@ window.addEventListener('popstate', e => { applyViewState(e.state); });
 
 function renderAll(){
   renderSummary();
-  renderOrg();
   renderEmployeeTab();
   renderMgrDetailTab();
   renderAnomaly();
@@ -1135,6 +1152,76 @@ function renderAll(){
 /* =========================================================================
    TAB: 요약
    ========================================================================= */
+// 실제 접속일(오늘) 기준으로, 근무계획엔 근무로 되어 있는데 실제 출근기록이 없는(결근)
+// 상담사만 뽑는다. 그 날짜의 근태 데이터가 아직 안 들어와 있으면(judgement가 'future')
+// 아무도 안 뜨는 게 맞다 — 아직 판단할 근거가 없기 때문이다.
+function getTodayAbsentList(){
+  const a = ANALYSIS;
+  const anchorIso = getWeekAnchorIso();
+  const anchorDay = Number(anchorIso.slice(8,10));
+  const dataAvailable = anchorDay <= a.cutoffDay;
+  const list = [];
+  if (dataAvailable){
+    a.employees.forEach(e => {
+      const d = e.days.find(x => x.day === anchorDay);
+      if (d && (d.judgement === 'absent_unauth' || d.judgement === 'half_day_absent')){
+        list.push({ emp:e, judgement:d.judgement, planCode:d.planCode });
+      }
+    });
+  }
+  return { anchorIso, dataAvailable, list };
+}
+
+function getFilteredAbsentList(){
+  const { list } = getTodayAbsentList();
+  let filtered = list;
+  if (ABSENT_MGR_FILTER !== '전체') filtered = filtered.filter(x => x.emp.manager === ABSENT_MGR_FILTER);
+  if (ABSENT_SEARCH){
+    const q = normName(ABSENT_SEARCH).toLowerCase();
+    filtered = filtered.filter(x => normName(x.emp.name).toLowerCase().includes(q) || x.emp.sabun.toLowerCase().includes(q) || normName(x.emp.store).toLowerCase().includes(q));
+  }
+  return filtered.sort((x,y)=> x.emp.name.localeCompare(y.emp.name,'ko'));
+}
+
+function buildAbsentListRowsHtml(filtered, dataAvailable){
+  if (!dataAvailable) return `<p class="section-sub" style="padding:10px 2px;">⏳ 아직 오늘자 근태 데이터가 반영되지 않았습니다. 데이터가 들어오면 여기에 표시됩니다.</p>`;
+  if (!filtered.length) return `<p class="section-sub" style="padding:10px 2px;">✓ 조건에 맞는 결근자가 없습니다.</p>`;
+  return filtered.map(x => `
+    <div class="absent-row" data-sabun="${escapeHtml(x.emp.sabun)}" title="${escapeHtml(x.emp.name)} 상세 보기">
+      <span class="absent-name">${escapeHtml(x.emp.name)}</span>
+      <span class="absent-meta">${escapeHtml(x.emp.sabun)} · ${escapeHtml(x.emp.store)} · ${escapeHtml(x.emp.manager)}</span>
+      <span class="tag tag-danger">${x.judgement==='half_day_absent' ? '결근(반차·미출근)' : '결근'}</span>
+    </div>`).join('');
+}
+
+function updateAbsentListBody(){
+  const { dataAvailable } = getTodayAbsentList();
+  const filtered = getFilteredAbsentList();
+  const wrap = document.getElementById('absentListWrap');
+  if (wrap) wrap.innerHTML = buildAbsentListRowsHtml(filtered, dataAvailable);
+  const pill = document.getElementById('absentCountPill');
+  if (pill) pill.textContent = `${filtered.length}명`;
+}
+
+function bindAbsentListEvents(){
+  const mgrSel = document.getElementById('absentMgrFilter');
+  const searchEl = document.getElementById('absentSearch');
+  if (!mgrSel || !searchEl) return;
+  mgrSel.addEventListener('change', e => { ABSENT_MGR_FILTER = e.target.value; updateAbsentListBody(); });
+  bindSearchInput(searchEl, val => { ABSENT_SEARCH = val; updateAbsentListBody(); });
+  const wrap = document.getElementById('absentListWrap');
+  if (wrap){
+    wrap.addEventListener('click', e => {
+      const row = e.target.closest('.absent-row');
+      if (!row) return;
+      ACTIVE_EMP = row.dataset.sabun;
+      EMP_MANAGER_FILTER = '전체';
+      document.querySelector('.tab-btn[data-tab="employee"]').click();
+      renderEmployeeTab();
+    });
+  }
+}
+
 function renderSummary(){
   const a = ANALYSIS;
   const total = a.employees.length;
@@ -1190,6 +1277,11 @@ function renderSummary(){
   const storeCountNote = a.totalElectrolandStores>0
     ? `<div class="notice ${storeCountMismatch?'notice-warn':'notice-info'}"><span>${storeCountMismatch?'⚠':'ℹ'}</span><div>매장매칭 파일 기준 전자랜드 매장은 총 <b>${a.totalElectrolandStores}개</b>이며, 지역별 합계는 <b>${storeCountSum}개</b>입니다.${storeCountMismatch ? ' 지역(권역) 값이 비어있거나 잘못 입력된 매장이 있을 수 있습니다.' : ' (일치합니다)'}</div></div>`
     : '';
+
+  // 오늘의 결근자 리스트 카드용 데이터
+  const { anchorIso: absentAnchorIso, dataAvailable: absentDataAvailable } = getTodayAbsentList();
+  const absentFilteredList = getFilteredAbsentList();
+  const absentManagers = Array.from(new Set(a.employees.map(e=>e.manager))).sort((x,y)=>x.localeCompare(y,'ko'));
 
   // group by 매니저 — compact number-summary cards
   const byMgr = new Map();
@@ -1256,29 +1348,73 @@ function renderSummary(){
       </div>
 
       <div class="panel-card">
-        <h3>근태 판정 분포 &amp; 준수율</h3>
-        <p class="section-sub" style="margin:-6px 0 12px;">전체 상담사 × 일자, 기준일(${a.cutoffIso})까지</p>
-        <div class="dist-grid dist-grid-scroll">${distHtml}</div>
+        <h3>오늘의 결근자 리스트</h3>
+        <p class="section-sub" style="margin:-6px 0 10px;">기준일(실제 접속일): <b class="mono">${absentAnchorIso}</b> · 데이터 업로드: <b class="mono">${SAVED_META&&SAVED_META.savedAt ? escapeHtml(fmtSavedAt(SAVED_META.savedAt)) : '정보 없음'}</b>${absentDataAvailable ? '' : ' · <span style="color:#B96A28;">⏳ 오늘자 데이터 미반영</span>'}</p>
+        <div class="filter-row" style="margin-bottom:8px; gap:8px;">
+          <select id="absentMgrFilter" style="flex:none;">
+            <option value="전체">전체 매니저</option>
+            ${absentManagers.map(m=>`<option value="${escapeHtml(m)}" ${ABSENT_MGR_FILTER===m?'selected':''}>${escapeHtml(m)}</option>`).join('')}
+          </select>
+          <input type="text" id="absentSearch" placeholder="이름/사번/매장 검색…" value="${escapeHtml(ABSENT_SEARCH)}" style="flex:1; min-width:0;">
+          <span class="count-pill" id="absentCountPill">${absentFilteredList.length}명</span>
+        </div>
+        <div class="chart-scroll" id="absentListWrap">${buildAbsentListRowsHtml(absentFilteredList, absentDataAvailable)}</div>
       </div>
     </div>
 
     <div class="panel-card">
       <h3>매니저별 요약</h3>
+      <p class="section-sub" style="margin:-6px 0 12px;">매니저를 클릭하면 담당 상담사별 정상/이상 건수가 아래에 펼쳐집니다.</p>
       <div class="mgr-strip">${mgrGridHtml || '<p class="section-sub">데이터 없음</p>'}</div>
+      <div id="mgrExpandPanel">${buildMgrExpandPanelHtml(SUMMARY_EXPANDED_MGR)}</div>
     </div>
 
     ${renderWeeklyScheduleHtml()}
   `;
   bindWeeklyScheduleEvents();
+  bindAbsentListEvents();
+  bindMgrExpandPanelEvents();
   document.querySelectorAll('.mgr-chip').forEach(chip => {
-    const goToManager = () => {
-      EMP_MANAGER_FILTER = chip.dataset.manager;
-      ACTIVE_EMP = null; // force re-pick within the new manager's scope
+    const toggleManager = () => {
+      const mgr = chip.dataset.manager;
+      SUMMARY_EXPANDED_MGR = (SUMMARY_EXPANDED_MGR === mgr) ? null : mgr;
+      document.querySelectorAll('.mgr-chip').forEach(c => c.classList.toggle('active', c.dataset.manager === SUMMARY_EXPANDED_MGR));
+      document.getElementById('mgrExpandPanel').innerHTML = buildMgrExpandPanelHtml(SUMMARY_EXPANDED_MGR);
+      bindMgrExpandPanelEvents();
+    };
+    chip.addEventListener('click', toggleManager);
+    chip.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleManager(); } });
+  });
+}
+
+// 매니저별 요약에서 매니저를 클릭하면 펼쳐지는 담당 상담사 목록 — 예전 "조직현황" 탭이 하던
+// "매니저 펼치면 상담사별 정상/이상 건수 보기" 기능을 요약 탭 안으로 그대로 옮긴 것이다.
+function buildMgrExpandPanelHtml(mgrName){
+  if (!mgrName) return '';
+  const a = ANALYSIS;
+  const emps = a.employees.filter(e => e.manager === mgrName).sort((x,y)=> (x.store||'').localeCompare(y.store||'','ko') || x.name.localeCompare(y.name,'ko'));
+  const totalAnomalies = a.anomalies.filter(x => (x.manager||'미매칭') === mgrName).length;
+  const chips = emps.map(e => {
+    const empAnomalies = e.days.filter(d => STATUS_META[d.judgement].severity>=1).length;
+    const dotColor = empAnomalies>0 ? 'var(--danger)' : 'var(--brand-blue)';
+    return `<span class="org-ce-chip" data-sabun="${escapeHtml(e.sabun)}"><span class="dot" style="background:${dotColor}"></span>${escapeHtml(e.name)} <span style="color:var(--muted)">· ${escapeHtml(e.store)}${empAnomalies?` · 이상${empAnomalies}`:''}</span></span>`;
+  }).join('');
+  return `
+    <div class="mgr-expand-panel">
+      <div class="mgr-expand-title">${escapeHtml(mgrName)} 담당 상담사 <span class="count-pill">${emps.length}명 · 이상 ${totalAnomalies}건</span></div>
+      <div class="org-ce-list open">${chips || '<span class="section-sub">담당 상담사가 없습니다</span>'}</div>
+    </div>`;
+}
+
+function bindMgrExpandPanelEvents(){
+  document.querySelectorAll('#mgrExpandPanel .org-ce-chip').forEach(chip => {
+    chip.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      ACTIVE_EMP = chip.dataset.sabun;
+      EMP_MANAGER_FILTER = '전체';
       document.querySelector('.tab-btn[data-tab="employee"]').click();
       renderEmployeeTab();
-    };
-    chip.addEventListener('click', goToManager);
-    chip.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goToManager(); } });
+    });
   });
 }
 
@@ -2422,8 +2558,14 @@ function getMgrDetailFilteredEmployees(){
 function buildMgrWeekMiniTable(emps, week){
   const dayCols = week.filter(d => d.inMonth);
   const isFullWeek = week.every(d => d.inMonth); // 월요일 시작~일요일 끝, 이번 달 안에 온전히 들어있는 주만 준수여부 표기
+  // "미준수만 보기" 체크박스가 켜져 있으면, 온전한 주에 한해 그 주 미준수자만 남긴다
+  // (부분 주는 준수 판정 자체가 없어서 필터 영향을 받지 않는다).
+  if (MGRDETAIL_NONCOMPLIANT_ONLY && isFullWeek){
+    emps = emps.filter(e => !isWeeklyRestCompliant(e, week));
+  }
   if (!emps.length){
-    return `<table class="mg-table mg-week-mini"><tbody><tr><td style="text-align:center;color:var(--muted);padding:14px;">조건에 맞는 상담사가 없습니다</td></tr></tbody></table>`;
+    const msg = MGRDETAIL_NONCOMPLIANT_ONLY && isFullWeek ? '이 주는 미준수자가 없습니다 (전원 준수)' : '조건에 맞는 상담사가 없습니다';
+    return `<table class="mg-table mg-week-mini"><tbody><tr><td style="text-align:center;color:var(--muted);padding:14px;">${msg}</td></tr></tbody></table>`;
   }
   const rows = [];
   let i = 0;
@@ -2651,6 +2793,10 @@ function renderMgrDetailTab(){
         </select>
         <input type="text" id="mgrDetailSearch" placeholder="매니저/이름/사번/매장 검색…" value="${escapeHtml(MGRDETAIL_SEARCH)}">
         <span class="count-pill" id="mgrDetailCountPill">${emps.length}명</span>
+        <label class="mg-noncompliant-toggle">
+          <input type="checkbox" id="mgrNonCompliantOnly" ${MGRDETAIL_NONCOMPLIANT_ONLY?'checked':''}>
+          ⚠ 미준수(결근 포함)만 보기
+        </label>
         <button type="button" class="btn btn-outline btn-sm" id="mgrExpandAllBtn">전체 펼치기</button>
         <button type="button" class="btn btn-outline btn-sm" id="mgrCollapseAllBtn">전체 접기</button>
         <button type="button" class="btn btn-primary btn-sm" id="mgrDetailExportBtn" style="margin-left:auto;">⬇ 월간 근태표 엑셀 다운로드</button>
@@ -2670,6 +2816,14 @@ function renderMgrDetailTab(){
 
   document.getElementById('mgrDetailMgrFilter').addEventListener('change', e => { MGRDETAIL_MANAGER = e.target.value; updateMgrDetailAccordion(); });
   bindSearchInput(document.getElementById('mgrDetailSearch'), val => { MGRDETAIL_SEARCH = val; updateMgrDetailAccordion(); });
+  document.getElementById('mgrNonCompliantOnly').addEventListener('change', e => {
+    MGRDETAIL_NONCOMPLIANT_ONLY = e.target.checked;
+    if (MGRDETAIL_NONCOMPLIANT_ONLY){
+      // 체크하는 순간 결과가 바로 보이도록 온전한 주차는 전부 펼쳐준다.
+      weeks.forEach((w,wi) => { if (w.every(d=>d.inMonth)) MGRDETAIL_EXPANDED_WEEKS.add(wi); });
+    }
+    updateMgrDetailAccordion();
+  });
   document.getElementById('mgrExpandAllBtn').addEventListener('click', () => {
     weeks.forEach((w,wi) => { if (w.some(d=>d.inMonth)) MGRDETAIL_EXPANDED_WEEKS.add(wi); });
     updateMgrDetailAccordion();
@@ -2702,78 +2856,6 @@ function renderMgrDetailTab(){
 }
 
 
-function renderOrg(){
-  const a = ANALYSIS;
-  const filterHtml = `
-    <div class="filter-row">
-      <span class="badge" style="background:var(--accent-soft);color:var(--accent);border:1px solid #BFE0D5;">경로 · 전자랜드만 표시</span>
-      <span class="count-pill" id="orgCountPill"></span>
-    </div>`;
-
-  const filtered = a.employees;
-
-  // group: regionHead -> manager -> [employees]
-  const tree = new Map();
-  filtered.forEach(e => {
-    const head = e.regionHead || '미매칭';
-    if (!tree.has(head)) tree.set(head, new Map());
-    const mgrMap = tree.get(head);
-    const mgr = e.manager || '미매칭';
-    if (!mgrMap.has(mgr)) mgrMap.set(mgr, []);
-    mgrMap.get(mgr).push(e);
-  });
-
-  let html = filterHtml;
-  Array.from(tree.entries()).sort((x,y)=>x[0].localeCompare(y[0],'ko')).forEach(([head, mgrMap]) => {
-    const headCount = Array.from(mgrMap.values()).reduce((s,arr)=>s+arr.length,0);
-    const headAnomalies = a.anomalies.filter(x => (x.regionHead||'미매칭')===head).length;
-    html += `<div class="org-region">
-      <div class="org-region-head">
-        <span>🧭 ${escapeHtml(head)} <span style="font-weight:500;color:var(--muted);">지역장</span></span>
-        <span class="stat">${headCount}명 · 이상 ${headAnomalies}건</span>
-      </div>
-      <div class="org-manager">`;
-    Array.from(mgrMap.entries()).sort((x,y)=>x[0].localeCompare(y[0],'ko')).forEach(([mgr, emps], idx) => {
-      const mgrId = `org_${normName(head)}_${normName(mgr)}_${idx}`.replace(/[^a-zA-Z0-9가-힣_]/g,'');
-      const mgrAnomalies = a.anomalies.filter(x => (x.manager||'미매칭')===mgr && (x.regionHead||'미매칭')===head).length;
-      const stores = Array.from(new Set(emps.map(e=>e.store)));
-      html += `<div class="org-manager-row" data-target="${mgrId}">
-        <span class="chev">▶</span>
-        <span class="name">${escapeHtml(mgr)}</span>
-        <span class="meta">매니저 · 매장 ${stores.length}개</span>
-        <span class="spacer"></span>
-        <span class="meta">${emps.length}명 · 이상 ${mgrAnomalies}건</span>
-      </div>
-      <div class="org-ce-list" id="${mgrId}">
-        ${emps.map(e => {
-          const empAnomalies = e.days.filter(d=>STATUS_META[d.judgement].severity>=1).length;
-          const dotColor = empAnomalies>0 ? 'var(--danger)' : 'var(--accent)';
-          return `<span class="org-ce-chip" data-sabun="${escapeHtml(e.sabun)}"><span class="dot" style="background:${dotColor}"></span>${escapeHtml(e.name)} <span style="color:var(--muted)">· ${escapeHtml(e.store)}${empAnomalies?` · 이상${empAnomalies}`:''}</span></span>`;
-        }).join('')}
-      </div>`;
-    });
-    html += `</div></div>`;
-  });
-
-  document.getElementById('panel-org').innerHTML = html || '<div class="empty-state"><div class="big">표시할 데이터가 없습니다</div></div>';
-  document.getElementById('orgCountPill').textContent = `${filtered.length}명 표시 중`;
-
-  document.querySelectorAll('.org-manager-row').forEach(row => {
-    row.addEventListener('click', () => {
-      row.classList.toggle('open');
-      document.getElementById(row.dataset.target).classList.toggle('open');
-    });
-  });
-  document.querySelectorAll('.org-ce-chip').forEach(chip => {
-    chip.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      ACTIVE_EMP = chip.dataset.sabun;
-      EMP_MANAGER_FILTER = '전체';
-      document.querySelector('.tab-btn[data-tab="employee"]').click();
-      renderEmployeeTab();
-    });
-  });
-}
 
 /* =========================================================================
    FILE UPLOAD HANDLING
