@@ -297,9 +297,11 @@ main{max-width:1360px; margin:0 auto; padding:26px 28px 80px;}
 .mg-month-hdr{background:#E9EBE4 !important; font-size:12px; letter-spacing:0.3px;}
 .mg-name{border-left:2px solid var(--line);}
 .mg-group-end td{border-bottom:2px solid #C9CEC3;}
-.mg-store, .mg-name{text-align:left; padding:5px 8px; font-size:11.5px; min-width:70px;}
+.mg-store, .mg-name{text-align:left; padding:5px 8px; font-size:11.5px; min-width:110px;}
 .mg-store{font-weight:700; color:var(--ink);}
 .mg-name{font-weight:600;}
+.mg-quota-note{font-weight:500; font-size:9.5px; color:var(--muted); white-space:nowrap; margin-top:1px;}
+.mg-week-flag-note{font-weight:500; font-size:8.5px; opacity:0.85; white-space:nowrap; margin-top:1px;}
 .mg-daycell{width:44px; min-width:44px; max-width:44px; font-weight:700; overflow:hidden; text-overflow:clip; font-size:10px; padding:4px 1px;}
 .mg-table .mg-week-end{border-right:2px solid #E15A50;}
 .mg-off{background:#E7E9E4; color:#5B6459;}
@@ -312,7 +314,7 @@ main{max-width:1360px; margin:0 auto; padding:26px 28px 80px;}
 .mg-edu{background:#EAEAE6; color:#7C8378;}
 .mg-outmonth{background:#EFF0EC;}
 .mg-weekend-text{color:#E15A50 !important;}
-.mg-week-flag{width:52px; min-width:52px; font-weight:700; border-left:2px solid #E15A50; font-size:10px;}
+.mg-week-flag{width:78px; min-width:78px; font-weight:700; border-left:2px solid #E15A50; font-size:10px;}
 .mg-week-flag.ok{background:var(--teal-soft); color:#0A8C7F;}
 .mg-week-flag.bad{background:var(--danger-soft); color:#C13F34;}
 .mg-row-clickable{cursor:pointer;}
@@ -798,6 +800,9 @@ let MGRDETAIL_SEARCH = '';
 // cached 매장/매니저 매칭 data so the admin doesn't have to re-upload it every run —
 // only replaced when a new match file is actually uploaded.
 let CACHED_MATCH_DATA = null;
+let CACHED_PLAN_DATA = null;
+let CACHED_ATTEND_DATA = null;
+let CACHED_LEAVE_DATA = null;
 
 // tracks, for each of the 4 source files, the filename + when it was last (re)applied —
 // shown to admin and viewers alike via the "업데이트 정보" notice.
@@ -807,9 +812,14 @@ const FILE_META_LABELS = { plan:'매장근무계획관리', attend:'근태관리
 // --- admin / shared-view mode ---
 // This is a simple client-side access code, not real authentication — anyone who
 // opens this file's source can read it. Change it before sharing the link.
-const ADMIN_PASSCODE = 'zeniel2026';
+const ADMIN_PASSCODE_KEY = 'zeniel_admin_passcode';
+const DEFAULT_ADMIN_PASSCODE = 'zeniel2026';
+let ADMIN_PASSCODE = null;
 const SHARED_KEY = 'zeniel_attendance_latest';
 let IS_ADMIN = false;
+const VIEW_CODE_KEY = 'zeniel_view_access_code';
+const DEFAULT_VIEW_ACCESS_CODE = 'zeniel-view';
+let VIEW_ACCESS_CODE = null;
 let SAVED_META = null; // {savedAt} pulled from shared storage
 let STORAGE_AVAILABLE = (typeof window !== 'undefined' && !!window.storage);
 
@@ -2555,7 +2565,53 @@ function getMgrDetailFilteredEmployees(){
 
 // 한 주(월~일, 그 달에 걸치는 날짜만)에 대한 작은 표를 만든다 — 매장명은 이전처럼 rowspan으로
 // 합치고, 그 주에 휴무 미준수인 사람은 행 배경을 옅은 빨강으로 표시해 바로 눈에 띄게 한다.
-function buildMgrWeekMiniTable(emps, week){
+// 하루가 "정상휴무 사용" 또는 "대체휴무 사용"으로 잡히는지, buildAnalysis의 집계 로직과
+// 정확히 같은 기준으로 판단한다 (분석 시점에 한 번만 합산되는 usage.offUsed/substituteUsed는
+// 월 전체 누적값이라 주차별로 쪼갤 수 없어서, 화면에 필요한 시점까지만 다시 계산한다).
+function dayRestUsage(dayRec){
+  if (!dayRec) return { off:0, sub:0 };
+  const code = (dayRec.planCode||'').trim();
+  const judgement = dayRec.judgement;
+  if (code === '휴무') return { off: judgement==='off_ok' ? 1 : 0, sub: 0 };
+  if (code === '대체휴일(1일)' || code === '보상휴가(1일)') return { off:0, sub: judgement==='off_ok' ? 1 : 0 };
+  if (code === '대체휴일(0.5일)' || code === '보상휴가(0.5일)') return { off:0, sub: judgement==='off_ok' ? 0.5 : 0 };
+  if (!dayRec.actual && (dayRec.leaveEntries||[]).some(le => le.status==='승인' && (le.kind||'').includes('대체'))) return { off:0, sub:1 };
+  return { off:0, sub:0 };
+}
+
+// 1주차부터 uptoWeekIndex번째 주까지(그 주 포함) 누적으로 정상휴무/대체휴무를 몇 번 썼는지 센다 —
+// "잔여 휴무"는 그 주까지 실제로 쓴 만큼 계속 줄어들어야 하므로, 월 전체 총합이 아니라
+// 이렇게 누적으로 계산해야 한다.
+function computeCumulativeRestUsage(emp, weeks, uptoWeekIndex){
+  let off = 0, sub = 0;
+  for (let wi = 0; wi <= uptoWeekIndex; wi++){
+    weeks[wi].filter(d => d.inMonth).forEach(wd => {
+      const dayRec = emp.days.find(x => x.day === wd.day);
+      const u = dayRestUsage(dayRec);
+      off += u.off; sub += u.sub;
+    });
+  }
+  return { off, sub };
+}
+
+// 이번 주 "정상휴무"가 실제로 확정된(이미 지나서 확인된) 며칠인지와, 스케줄에 잡혀있는
+// 전체(아직 지나지 않은 예정 포함) 며칠인지를 나눠서 센다 — 휴무준수 배지 옆에 "그 근거"를
+// 같이 보여주기 위함이다.
+function getWeeklyOffActualVsPlanned(emp, week){
+  let actual = 0, planned = 0;
+  week.forEach(wd => {
+    if (!wd.inMonth) return;
+    const dayRec = emp.days.find(d => d.day === wd.day);
+    if (!dayRec) return;
+    if ((dayRec.planCode||'').trim() !== '휴무') return;
+    planned++;
+    if (dayRec.judgement === 'off_ok') actual++;
+  });
+  return { actual, planned };
+}
+
+function buildMgrWeekMiniTable(emps, weeks, weekIndex){
+  const week = weeks[weekIndex];
   const dayCols = week.filter(d => d.inMonth);
   const isFullWeek = week.every(d => d.inMonth); // 월요일 시작~일요일 끝, 이번 달 안에 온전히 들어있는 주만 준수여부 표기
   // "미준수만 보기" 체크박스가 켜져 있으면, 온전한 주에 한해 그 주 미준수자만 남긴다
@@ -2585,12 +2641,24 @@ function buildMgrWeekMiniTable(emps, week){
       return `<td class="mg-daycell ${cls}${(dcol.dow===0||dcol.dow===6)?' mg-weekend-text':''}">${escapeHtml(label)}</td>`;
     }).join('');
     const storeCell = showStore ? `<td class="mg-store" rowspan="${span}">${escapeHtml(e.store)}</td>` : '';
+    const offCounts = getWeeklyOffActualVsPlanned(e, week);
     const flagCell = isFullWeek
-      ? `<td class="mg-week-flag ${compliant?'ok':'bad'}">${compliant ? '✓ 준수' : '⚠ 미준수'}</td>`
+      ? `<td class="mg-week-flag ${compliant?'ok':'bad'}">${compliant ? '✓ 준수' : '⚠ 미준수'}<div class="mg-week-flag-note">실제 ${offCounts.actual}일 / 계획 ${offCounts.planned}일</div></td>`
       : '';
+    // 이름 옆에 휴무 한도 정보를 같이 보여준다: 총 휴무 가능(정상휴무 한도 + 대체휴무 한도,
+    // 한 달간 사용 가능한 총 개수) · 1주차부터 "이번 주까지" 실제로 확정 사용한 개수 · 잔여
+    // 휴무(총 한도 - 실제 사용). "이번 주" 하나로 뭉뚱그리면 아직 지나지 않은 예정 휴무까지
+    // 섞여서 헷갈리므로, 실제 사용분만 명확히 분리해서 보여준다.
+    const qs = computeQuotaStatus(e.sabun, e.usage);
+    const hasAnyQuota = qs.offQuota!=null || qs.subQuota!=null;
+    const totalQuota = hasAnyQuota ? (qs.offQuota||0) + (qs.subQuota||0) : null;
+    const cumUsed = computeCumulativeRestUsage(e, weeks, weekIndex);
+    const actualUsedSoFar = Math.round((cumUsed.off+cumUsed.sub)*10)/10;
+    const totalRemaining = totalQuota==null ? null : Math.round((totalQuota - actualUsedSoFar)*10)/10;
+    const quotaNote = `가능 ${totalQuota==null?'-':totalQuota} · 실제사용 ${actualUsedSoFar} · 잔여 ${totalRemaining==null?'-':totalRemaining}`;
     return `<tr class="mg-row-clickable${isGroupEnd?' mg-group-end':''}${(isFullWeek && !compliant)?' mg-noncompliant-row':''}" data-sabun="${escapeHtml(e.sabun)}" title="${escapeHtml(e.name)} 상세 보기">
       ${storeCell}
-      <td class="mg-name">${escapeHtml(e.name)}</td>
+      <td class="mg-name">${escapeHtml(e.name)}<div class="mg-quota-note">${quotaNote}</div></td>
       ${dayCells}
       ${flagCell}
     </tr>`;
@@ -2635,7 +2703,7 @@ function buildMgrWeekAccordionHtml(weeks, emps){
         </button>
         <div class="mg-week-acc-body" style="display:${isOpen?'block':'none'};">
           <div class="table-wrap" style="max-height:420px; overflow:auto;">
-            ${buildMgrWeekMiniTable(emps, week)}
+            ${buildMgrWeekMiniTable(emps, weeks, wi)}
           </div>
         </div>
       </div>`;
@@ -2919,42 +2987,39 @@ async function handleFile(file, requestedSlot){
   }
 }
 
+const CACHED_DATA_BY_SLOT = {
+  get plan(){ return CACHED_PLAN_DATA; },
+  get attend(){ return CACHED_ATTEND_DATA; },
+  get leave(){ return CACHED_LEAVE_DATA; },
+  get match(){ return CACHED_MATCH_DATA; },
+};
+
 function updateUploadUI(){
-  ['plan','attend','leave'].forEach(slot => {
+  // 4개 파일 모두 동일한 규칙: 이번 실행에서 새 파일을 올리면 그걸 쓰고, 안 올렸는데 이전에
+  // 저장해둔 데이터가 있으면 그걸 그대로 재사용한다(매장/매니저 매칭 파일과 똑같은 방식).
+  ['plan','attend','leave','match'].forEach(slot => {
     const card = document.getElementById('card-'+slot);
     const statusEl = card.querySelector('.uc-status');
     const fnameEl = statusEl.querySelector('.fname');
+    const cached = CACHED_DATA_BY_SLOT[slot];
     if (FILES[slot]){
       card.classList.add('filled');
-      fnameEl.textContent = FILES[slot].name;
+      fnameEl.textContent = `${FILES[slot].name} (이번 실행에 새로 반영)`;
+    } else if (cached){
+      card.classList.add('filled');
+      fnameEl.textContent = '기존 저장된 데이터 사용 중 (새 파일 업로드 시에만 갱신)';
     } else {
       card.classList.remove('filled');
       fnameEl.textContent = '파일을 선택하거나 끌어다 놓으세요';
     }
   });
 
-  // 매장/매니저 매칭 파일은 이전에 저장된 데이터가 있으면 이번 실행에서 생략할 수 있다.
-  const matchCard = document.getElementById('card-match');
-  const matchStatusEl = matchCard.querySelector('.uc-status');
-  const matchFnameEl = matchStatusEl.querySelector('.fname');
-  if (FILES.match){
-    matchCard.classList.add('filled');
-    matchFnameEl.textContent = `${FILES.match.name} (이번 실행에 새로 반영)`;
-  } else if (CACHED_MATCH_DATA){
-    matchCard.classList.add('filled');
-    matchFnameEl.textContent = '기존 저장된 매칭 데이터 사용 중 (새 파일 업로드 시에만 갱신)';
-  } else {
-    matchCard.classList.remove('filled');
-    matchFnameEl.textContent = '파일을 선택하거나 끌어다 놓으세요';
-  }
-
-  const allSet = ['plan','attend','leave'].every(s => FILES[s]) && (FILES.match || CACHED_MATCH_DATA);
+  const allSet = ['plan','attend','leave','match'].every(s => FILES[s] || CACHED_DATA_BY_SLOT[s]);
+  const anyCachedNoFile = ['plan','attend','leave','match'].some(s => !FILES[s] && CACHED_DATA_BY_SLOT[s]);
   document.getElementById('runBtn').disabled = !allSet;
   document.getElementById('runHint').textContent = allSet
-    ? '모든 파일이 준비되었습니다. 분석을 실행하세요.'
-    : (CACHED_MATCH_DATA
-        ? '근무계획·근태관리·연차신청 3개 파일을 업로드하면 실행할 수 있습니다. (매칭 파일은 기존 데이터 사용)'
-        : '4개 파일을 모두 업로드하면 실행할 수 있습니다.');
+    ? (anyCachedNoFile ? '모든 파일이 준비되었습니다 (일부는 기존 저장된 데이터 사용). 분석을 실행하세요.' : '모든 파일이 준비되었습니다. 분석을 실행하세요.')
+    : '4개 파일을 모두 업로드하면 실행할 수 있습니다. (이전에 저장된 데이터가 있는 파일은 생략 가능)';
 }
 
 function initUpload(){
@@ -2981,7 +3046,7 @@ function initUpload(){
   document.getElementById('resetBtn').addEventListener('click', () => {
     ['plan','attend','leave','match'].forEach(s => FILES[s]=null);
     updateUploadUI();
-    showNotice('업로드 칸을 초기화했습니다. (저장된 매칭 데이터는 유지됩니다)', 'info');
+    showNotice('업로드 칸을 초기화했습니다. (이전에 저장된 데이터는 그대로 유지됩니다)', 'info');
   });
 
   document.getElementById('runBtn').addEventListener('click', runAnalysis);
@@ -2993,18 +3058,26 @@ function runAnalysis(){
   btn.textContent = '분석 중…';
   setTimeout(async () => {
     try {
+      const planData = FILES.plan ? FILES.plan.parsed : CACHED_PLAN_DATA;
+      const attendData = FILES.attend ? FILES.attend.parsed : CACHED_ATTEND_DATA;
+      const leaveData = FILES.leave ? FILES.leave.parsed : CACHED_LEAVE_DATA;
       const matchData = FILES.match ? FILES.match.parsed : CACHED_MATCH_DATA;
-      if (!matchData){
-        alert('매장/매니저 매칭 파일이 필요합니다. 최초 1회는 반드시 업로드해주세요.');
+      if (!planData || !attendData || !leaveData || !matchData){
+        alert('4개 파일이 모두 필요합니다. 이전에 저장된 데이터가 없는 파일은 최초 1회 반드시 업로드해주세요.');
         return;
       }
-      if (FILES.match) CACHED_MATCH_DATA = FILES.match.parsed; // only replace when a new file was uploaded
-      ANALYSIS = buildAnalysis(FILES.plan.parsed, FILES.attend.parsed, FILES.leave.parsed, matchData);
+      // 새로 업로드된 파일만 캐시를 갱신한다 — 안 올린 파일은 기존 저장 데이터를 그대로 둔다.
+      if (FILES.plan) CACHED_PLAN_DATA = FILES.plan.parsed;
+      if (FILES.attend) CACHED_ATTEND_DATA = FILES.attend.parsed;
+      if (FILES.leave) CACHED_LEAVE_DATA = FILES.leave.parsed;
+      if (FILES.match) CACHED_MATCH_DATA = FILES.match.parsed;
+      ANALYSIS = buildAnalysis(planData, attendData, leaveData, matchData);
 
       const now = new Date().toISOString();
-      ['plan','attend','leave'].forEach(slot => { FILE_META[slot] = { name: FILES[slot].name, updatedAt: now }; });
-      if (FILES.match) FILE_META.match = { name: FILES.match.name, updatedAt: now };
-      else if (!FILE_META.match) FILE_META.match = { name: '(기존 저장된 매칭 데이터)', updatedAt: now };
+      ['plan','attend','leave','match'].forEach(slot => {
+        if (FILES[slot]) FILE_META[slot] = { name: FILES[slot].name, updatedAt: now };
+        else if (!FILE_META[slot]) FILE_META[slot] = { name: '(기존 저장된 데이터)', updatedAt: now };
+      });
 
       document.getElementById('uploadSection').style.display = 'none';
       document.getElementById('resultSection').style.display = 'block';
@@ -3105,6 +3178,8 @@ function renderAdminHeaderControl(){
     el.innerHTML = `
       <span class="badge" style="background:rgba(24,99,220,0.14); border-color:rgba(24,99,220,0.35); color:var(--brand-blue);">● 관리자 모드</span>
       <button class="btn btn-ghost btn-sm" id="hdrReuploadBtn">${ANALYSIS ? '◂ 파일 다시 업로드' : '업로드 화면 열기'}</button>
+      <button class="btn btn-ghost btn-sm" id="hdrViewCodeBtn">🔑 로그인 코드 변경</button>
+      <button class="btn btn-ghost btn-sm" id="hdrAdminPassBtn">🔑 관리자 코드 변경</button>
       <button class="btn btn-outline btn-sm" id="hdrLogoutBtn">로그아웃</button>
     `;
     document.getElementById('hdrReuploadBtn').addEventListener('click', () => {
@@ -3114,6 +3189,8 @@ function renderAdminHeaderControl(){
       updateUploadUI();
       window.scrollTo({top:0, behavior:'smooth'});
     });
+    document.getElementById('hdrViewCodeBtn').addEventListener('click', showChangeViewCodeModal);
+    document.getElementById('hdrAdminPassBtn').addEventListener('click', showChangeAdminPasscodeModal);
     document.getElementById('hdrLogoutBtn').addEventListener('click', () => setAdminMode(false));
   } else {
     el.innerHTML = `<button class="btn btn-ghost btn-sm" id="hdrLoginBtn">🔒 관리자 로그인</button>`;
@@ -3124,6 +3201,40 @@ function renderAdminHeaderControl(){
 /* =========================================================================
    ADMIN LOGIN + SHARED STORAGE
    ========================================================================= */
+// plan은 Map이 없어서 그대로 JSON 저장 가능. attend/leave는 내부에 Map을 쓰고 있어서
+// (byKey, codeBySabun, dateMap) 그대로 JSON.stringify 하면 사라지므로 배열로 바꿔서 저장하고
+// 불러올 때 다시 Map으로 복원한다.
+function serializeAttendData(ad){
+  if (!ad) return null;
+  return {
+    records: ad.records, maxDateStr: ad.maxDateStr, sheetName: ad.sheetName,
+    byKeyEntries: Array.from(ad.byKey.entries()),
+    codeBySabunEntries: Array.from(ad.codeBySabun.entries()),
+  };
+}
+function deserializeAttendData(obj){
+  if (!obj) return null;
+  return {
+    records: obj.records, maxDateStr: obj.maxDateStr, sheetName: obj.sheetName,
+    byKey: new Map(obj.byKeyEntries||[]),
+    codeBySabun: new Map(obj.codeBySabunEntries||[]),
+  };
+}
+function serializeLeaveData(ld){
+  if (!ld) return null;
+  return {
+    all: ld.all, kept: ld.kept, dropped: ld.dropped, sheetName: ld.sheetName,
+    dateMapEntries: Array.from(ld.dateMap.entries()),
+  };
+}
+function deserializeLeaveData(obj){
+  if (!obj) return null;
+  return {
+    all: obj.all, kept: obj.kept, dropped: obj.dropped, sheetName: obj.sheetName,
+    dateMap: new Map(obj.dateMapEntries||[]),
+  };
+}
+
 function serializeMatchData(md){
   if (!md) return null;
   return {
@@ -3152,6 +3263,9 @@ async function loadSharedData(){
     SAVED_META = { savedAt: payload.savedAt };
     QUOTAS = payload.quotas || {};
     CACHED_MATCH_DATA = deserializeMatchData(payload.matchData);
+    CACHED_PLAN_DATA = payload.planData || null;
+    CACHED_ATTEND_DATA = deserializeAttendData(payload.attendData);
+    CACHED_LEAVE_DATA = deserializeLeaveData(payload.leaveData);
     FILE_META = payload.fileMeta || FILE_META;
     return true;
   } catch(err){
@@ -3167,7 +3281,12 @@ async function saveSharedData(quiet){
   try {
     const savedAt = new Date().toISOString();
     await window.storage.set(SHARED_KEY, JSON.stringify({
-      analysis: ANALYSIS, savedAt, quotas: QUOTAS, matchData: serializeMatchData(CACHED_MATCH_DATA), fileMeta: FILE_META,
+      analysis: ANALYSIS, savedAt, quotas: QUOTAS,
+      matchData: serializeMatchData(CACHED_MATCH_DATA),
+      planData: CACHED_PLAN_DATA,
+      attendData: serializeAttendData(CACHED_ATTEND_DATA),
+      leaveData: serializeLeaveData(CACHED_LEAVE_DATA),
+      fileMeta: FILE_META,
     }), true);
     SAVED_META = { savedAt };
     renderTopbarActions();
@@ -3230,6 +3349,149 @@ function setAdminMode(on){
   }
 }
 
+// 시스템 전체를 보려면(관리자든 담당자든) 먼저 로그인 코드를 통과해야 한다. 코드는 공유
+// 저장소에 저장해두고, 관리자만 바꿀 수 있게 한다(관리자 로그인 상태에서만 변경 버튼이 보임).
+async function loadViewAccessCode(){
+  if (!STORAGE_AVAILABLE){ VIEW_ACCESS_CODE = DEFAULT_VIEW_ACCESS_CODE; return; }
+  try {
+    const res = await window.storage.get(VIEW_CODE_KEY, true);
+    VIEW_ACCESS_CODE = (res && res.value) ? res.value : DEFAULT_VIEW_ACCESS_CODE;
+  } catch(err){
+    VIEW_ACCESS_CODE = DEFAULT_VIEW_ACCESS_CODE; // 아직 저장된 적 없음 → 기본 코드
+  }
+}
+
+async function saveViewAccessCode(newCode){
+  if (!STORAGE_AVAILABLE) return false;
+  try {
+    await window.storage.set(VIEW_CODE_KEY, newCode, true);
+    VIEW_ACCESS_CODE = newCode;
+    return true;
+  } catch(err){
+    console.error(err);
+    return false;
+  }
+}
+
+async function loadAdminPasscode(){
+  if (!STORAGE_AVAILABLE){ ADMIN_PASSCODE = DEFAULT_ADMIN_PASSCODE; return; }
+  try {
+    const res = await window.storage.get(ADMIN_PASSCODE_KEY, true);
+    ADMIN_PASSCODE = (res && res.value) ? res.value : DEFAULT_ADMIN_PASSCODE;
+  } catch(err){
+    ADMIN_PASSCODE = DEFAULT_ADMIN_PASSCODE; // 아직 저장된 적 없음 → 기본 코드
+  }
+}
+
+async function saveAdminPasscode(newCode){
+  if (!STORAGE_AVAILABLE) return false;
+  try {
+    await window.storage.set(ADMIN_PASSCODE_KEY, newCode, true);
+    ADMIN_PASSCODE = newCode;
+    return true;
+  } catch(err){
+    console.error(err);
+    return false;
+  }
+}
+
+function showViewLoginGate(onSuccess){
+  document.getElementById('gateSection').innerHTML = `
+    <div class="gate-card">
+      <div class="icon">🔒</div>
+      <h2>로그인이 필요합니다</h2>
+      <p>제니엘 전자랜드 상담사 근태 점검 시스템입니다.<br>계속하려면 로그인 코드를 입력하세요.</p>
+      <input type="password" id="viewLoginInput" placeholder="로그인 코드" style="width:100%; box-sizing:border-box; margin-bottom:10px;">
+      <div id="viewLoginError" class="notice notice-warn" style="display:none; text-align:left; margin-bottom:10px;"><span>⚠</span><div>로그인 코드가 올바르지 않습니다. 다시 입력해주세요.</div></div>
+      <button class="btn btn-primary" id="viewLoginBtn" style="width:100%;">로그인</button>
+    </div>`;
+  const input = document.getElementById('viewLoginInput');
+  const btn = document.getElementById('viewLoginBtn');
+  const errEl = document.getElementById('viewLoginError');
+  const tryLogin = () => {
+    if (input.value && input.value === VIEW_ACCESS_CODE){
+      onSuccess();
+    } else {
+      errEl.style.display = 'flex';
+      input.value = '';
+      input.focus();
+    }
+  };
+  btn.addEventListener('click', tryLogin);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+  input.focus();
+}
+
+function showChangeViewCodeModal(){
+  const wrap = document.createElement('div');
+  wrap.className = 'modal-backdrop';
+  wrap.innerHTML = `
+    <div class="modal-card">
+      <h3>로그인 코드 변경</h3>
+      <p>담당자들이 시스템에 접속할 때 입력하는 코드입니다. 관리자만 변경할 수 있습니다.</p>
+      <input type="text" id="newViewCodeInput" placeholder="새 로그인 코드" value="${escapeHtml(VIEW_ACCESS_CODE||'')}">
+      <div class="actions">
+        <button class="btn btn-outline btn-sm" id="viewCodeCancelBtn">취소</button>
+        <button class="btn btn-primary btn-sm" id="viewCodeConfirmBtn">저장</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const input = document.getElementById('newViewCodeInput');
+  input.focus();
+  input.select();
+  const close = () => wrap.remove();
+  document.getElementById('viewCodeCancelBtn').addEventListener('click', close);
+  wrap.addEventListener('click', e => { if (e.target === wrap) close(); });
+  document.getElementById('viewCodeConfirmBtn').addEventListener('click', async () => {
+    const val = input.value.trim();
+    if (!val){ alert('로그인 코드를 입력해주세요.'); return; }
+    const ok = await saveViewAccessCode(val);
+    close();
+    showNotice(ok ? '로그인 코드가 변경되었습니다. 다음 접속부터 새 코드가 필요합니다.' : '저장 중 오류가 발생했습니다.', ok?'info':'warn');
+  });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('viewCodeConfirmBtn').click(); });
+}
+
+function showChangeAdminPasscodeModal(){
+  const wrap = document.createElement('div');
+  wrap.className = 'modal-backdrop';
+  wrap.innerHTML = `
+    <div class="modal-card">
+      <h3>관리자 로그인 코드 변경</h3>
+      <p>관리자 로그인(파일 업로드·설정 변경)에 쓰이는 코드입니다. 확인을 위해 현재 코드를 먼저 입력해주세요.</p>
+      <input type="password" id="curAdminPassInput" placeholder="현재 관리자 코드">
+      <input type="text" id="newAdminPassInput" placeholder="새 관리자 코드" style="margin-top:8px;">
+      <div id="adminPassChangeError" class="notice notice-warn" style="display:none; text-align:left; margin-top:8px;"><span>⚠</span><div>현재 코드가 올바르지 않습니다.</div></div>
+      <div class="actions">
+        <button class="btn btn-outline btn-sm" id="adminPassChangeCancelBtn">취소</button>
+        <button class="btn btn-primary btn-sm" id="adminPassChangeConfirmBtn">저장</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const curInput = document.getElementById('curAdminPassInput');
+  const newInput = document.getElementById('newAdminPassInput');
+  const errEl = document.getElementById('adminPassChangeError');
+  curInput.focus();
+  const close = () => wrap.remove();
+  document.getElementById('adminPassChangeCancelBtn').addEventListener('click', close);
+  wrap.addEventListener('click', e => { if (e.target === wrap) close(); });
+  const submit = async () => {
+    if (curInput.value !== ADMIN_PASSCODE){
+      errEl.style.display = 'flex';
+      curInput.value = '';
+      curInput.focus();
+      return;
+    }
+    const val = newInput.value.trim();
+    if (!val){ alert('새 관리자 코드를 입력해주세요.'); return; }
+    const ok = await saveAdminPasscode(val);
+    close();
+    showNotice(ok ? '관리자 로그인 코드가 변경되었습니다. 다음 로그인부터 새 코드가 필요합니다.' : '저장 중 오류가 발생했습니다.', ok?'info':'warn');
+  };
+  document.getElementById('adminPassChangeConfirmBtn').addEventListener('click', submit);
+  newInput.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+}
+
 function renderGateLoading(){
   document.getElementById('gateSection').innerHTML = `
     <div class="gate-card">
@@ -3252,39 +3514,53 @@ async function initApp(){
   initUpload();
   initTabs();
   updateUploadUI();
-  renderAdminHeaderControl();
   renderGateLoading();
-  document.getElementById('fileMetaBtn').addEventListener('click', () => showFileMetaModal(false));
-  const goHome = () => {
-    const summaryBtn = document.querySelector('.tab-btn[data-tab="summary"]');
-    if (summaryBtn) summaryBtn.click(); // 요약 탭이 있을 때만(=분석 결과 화면일 때만) 이동
-  };
-  const logoEl = document.getElementById('brandLogoBtn');
-  logoEl.addEventListener('click', goHome);
-  logoEl.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome(); } });
 
-  const found = await loadSharedData();
-  updateUploadUI(); // CACHED_MATCH_DATA may have just been populated above
-  if (found){
-    // 첫 접속 시 업로드 화면이 아니라 관리자가 올려둔 분석 결과를 바로 보여준다.
-    document.getElementById('gateSection').innerHTML = '';
-    document.getElementById('resultSection').style.display = 'block';
-    renderTopbarActions();
-    renderAll();
-    try { history.replaceState(currentViewState(), '', '#summary'); } catch(e){}
-  } else if (!STORAGE_AVAILABLE){
-    // no shared storage in this context (e.g. opened as a local file) — behave as a
-    // single-user local tool: skip the admin gate and go straight to upload.
-    IS_ADMIN = true;
+  await loadViewAccessCode();
+  await loadAdminPasscode();
+
+  const proceed = async () => {
     renderAdminHeaderControl();
-    document.getElementById('gateSection').innerHTML = `
-      <div class="notice notice-info" style="max-width:760px;margin:20px auto;">
-        <span>ℹ</span><div>이 창은 저장소 공유 기능 없이 열려 있어 <b>이 브라우저에서만</b> 동작합니다. 담당자들과 URL로 공유하려면 Claude.ai에서 이 아티팩트를 열고 게시(Publish)한 링크를 사용해주세요.</div>
-      </div>`;
-    document.getElementById('uploadSection').style.display = 'block';
+    document.getElementById('fileMetaBtn').addEventListener('click', () => showFileMetaModal(false));
+    const goHome = () => {
+      const summaryBtn = document.querySelector('.tab-btn[data-tab="summary"]');
+      if (summaryBtn) summaryBtn.click(); // 요약 탭이 있을 때만(=분석 결과 화면일 때만) 이동
+    };
+    const logoEl = document.getElementById('brandLogoBtn');
+    logoEl.addEventListener('click', goHome);
+    logoEl.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome(); } });
+
+    const found = await loadSharedData();
+    updateUploadUI(); // CACHED_MATCH_DATA 등이 방금 채워졌을 수 있음
+    if (found){
+      // 첫 접속 시 업로드 화면이 아니라 관리자가 올려둔 분석 결과를 바로 보여준다.
+      document.getElementById('gateSection').innerHTML = '';
+      document.getElementById('resultSection').style.display = 'block';
+      renderTopbarActions();
+      renderAll();
+      try { history.replaceState(currentViewState(), '', '#summary'); } catch(e){}
+    } else if (!STORAGE_AVAILABLE){
+      // no shared storage in this context (e.g. opened as a local file) — behave as a
+      // single-user local tool: skip the admin gate and go straight to upload.
+      IS_ADMIN = true;
+      renderAdminHeaderControl();
+      document.getElementById('gateSection').innerHTML = `
+        <div class="notice notice-info" style="max-width:760px;margin:20px auto;">
+          <span>ℹ</span><div>이 창은 저장소 공유 기능 없이 열려 있어 <b>이 브라우저에서만</b> 동작합니다. 담당자들과 URL로 공유하려면 Claude.ai에서 이 아티팩트를 열고 게시(Publish)한 링크를 사용해주세요.</div>
+        </div>`;
+      document.getElementById('uploadSection').style.display = 'block';
+    } else {
+      document.getElementById('gateSection').innerHTML = '';
+      renderGateEmpty();
+    }
+  };
+
+  if (!STORAGE_AVAILABLE){
+    // 로컬 파일로 열린 단일 사용자 상황에서는 공유되는 로그인 코드 개념이 의미가 없어
+    // 로그인 게이트 없이 바로 진행한다(기존 관리자 게이트 생략 로직과 동일한 전제).
+    await proceed();
   } else {
-    document.getElementById('gateSection').innerHTML = '';
-    renderGateEmpty();
+    showViewLoginGate(proceed);
   }
 }
 
